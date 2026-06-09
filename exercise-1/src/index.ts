@@ -3,57 +3,59 @@
  * END OF DAY EXPLANATION
  * =====================================================
  *
- * This version intentionally demonstrates event loop
- * blocking.
+ * Initially both servers shared one Node.js process and
+ * one JavaScript execution thread.
  *
- * Server A and Server B run in the same Node.js process.
+ * Although Server A and Server B used different ports,
+ * requests were handled by the same event loop.
  *
- * Even though they listen on different ports, both share
- * the same event loop and JavaScript thread.
+ * While Server A executed the heavy loop, the event loop
+ * could not process requests arriving at Server B.
  *
- * When Server A executes a CPU-intensive loop, the event
- * loop becomes busy and cannot process incoming requests
- * for Server B.
+ * This proves that multiple HTTP servers in the same
+ * process do not receive separate event loops.
  *
- * Therefore requests to Server B must wait until the loop
- * finishes.
+ * After introducing worker_threads, the heavy counting
+ * operation runs in a worker thread instead of the main
+ * thread.
  *
- * If a third server existed in this same process, it would
- * also be blocked for the same reason.
+ * The main thread remains free to process incoming
+ * requests while the worker performs CPU-intensive work.
  *
- * Node.js can manage many servers concurrently, but CPU
- * intensive synchronous work blocks all of them when they
- * share the same process.
+ * Because the event loop is no longer blocked, Server B
+ * responds immediately.
+ *
+ * If a third server were added on port 5000, it would
+ * also remain responsive because the expensive work no
+ * longer executes on the main thread.
  */
 
 import http from "node:http";
+import path from "node:path";
+import { Worker } from "node:worker_threads";
 
-function runHeavyTask(): number {
-  const start = Date.now();
+function runHeavyTask(): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const workerPath =
+      process.env.NODE_ENV === "production"
+        ? path.resolve(__dirname, "worker.js")
+        : path.resolve("src/worker.ts");
+    const worker = new Worker(workerPath);
 
-  let count = 0;
-
-  while (count < 5_000_000_000) {
-    count++;
-  }
-
-  return Date.now() - start;
+    worker.on("message", resolve);
+    worker.on("error", reject);
+  });
 }
 
-const serverA = http.createServer((req, res) => {
+const serverA = http.createServer(async (req, res) => {
   if (req.url === "/heavy") {
-    const duration = runHeavyTask();
+    const result = await runHeavyTask();
 
     res.writeHead(200, {
       "Content-Type": "application/json",
     });
 
-    res.end(
-      JSON.stringify({
-        completed: true,
-        duration,
-      }),
-    );
+    res.end(JSON.stringify(result));
 
     return;
   }
