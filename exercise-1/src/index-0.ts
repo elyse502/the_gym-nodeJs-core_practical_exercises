@@ -27,9 +27,10 @@
  */
 
 import http from "node:http";
+import { performance } from "node:perf_hooks";
 
 function runHeavyTask(): number {
-  const start = Date.now();
+  const start = performance.now();
 
   let count = 0;
 
@@ -37,12 +38,20 @@ function runHeavyTask(): number {
     count++;
   }
 
-  return Date.now() - start;
+  const end = performance.now();
+
+  return end - start;
 }
 
 const serverA = http.createServer((req, res) => {
   if (req.url === "/heavy") {
+    console.log("\n=== HEAVY TASK STARTED ===");
+
     const duration = runHeavyTask();
+
+    console.log(`Heavy task completed in ${duration.toFixed(2)} ms`);
+
+    console.log("=== HEAVY TASK FINISHED ===\n");
 
     res.writeHead(200, {
       "Content-Type": "application/json",
@@ -51,7 +60,7 @@ const serverA = http.createServer((req, res) => {
     res.end(
       JSON.stringify({
         completed: true,
-        duration,
+        durationMs: Number(duration.toFixed(2)),
       }),
     );
 
@@ -64,6 +73,10 @@ const serverA = http.createServer((req, res) => {
 
 const serverB = http.createServer((req, res) => {
   if (req.url === "/ping") {
+    const timestamp = performance.now();
+
+    console.log(`PING received at ${timestamp.toFixed(2)} ms`);
+
     res.writeHead(200, {
       "Content-Type": "application/json",
     });
@@ -71,7 +84,7 @@ const serverB = http.createServer((req, res) => {
     res.end(
       JSON.stringify({
         status: "alive",
-        time: Date.now(),
+        timestampMs: Number(timestamp.toFixed(2)),
       }),
     );
 
@@ -89,3 +102,5 @@ serverA.listen(3000, () => {
 serverB.listen(4000, () => {
   console.log("Server B running on 4000 - http://localhost:4000/ping");
 });
+
+console.log("=== END OF DAY EXPLANATION ===");
