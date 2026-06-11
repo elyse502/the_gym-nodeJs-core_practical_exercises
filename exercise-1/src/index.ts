@@ -1,3 +1,8 @@
+import http from "node:http";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { Worker } from "node:worker_threads";
+
 /**
  * =====================================================
  * END OF DAY EXPLANATION
@@ -30,26 +35,48 @@
  * longer executes on the main thread.
  */
 
-import http from "node:http";
-import path from "node:path";
-import { Worker } from "node:worker_threads";
-
 function runHeavyTask(): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const workerPath =
       process.env.NODE_ENV === "production"
         ? path.resolve(__dirname, "worker.js")
         : path.resolve("src/worker.ts");
+
     const worker = new Worker(workerPath);
 
-    worker.on("message", resolve);
+    const start = performance.now();
+
+    worker.on("message", (result) => {
+      const end = performance.now();
+
+      console.log(`Worker completed in ${(end - start).toFixed(2)} ms`);
+
+      resolve(result);
+    });
+
     worker.on("error", reject);
   });
 }
 
+setInterval(() => {
+  console.log(`Heartbeat: ${performance.now().toFixed(2)} ms`);
+}, 1000);
+
 const serverA = http.createServer(async (req, res) => {
   if (req.url === "/heavy") {
+    console.log("\n=== HEAVY TASK STARTED ===");
+
+    const requestStart = performance.now();
+
     const result = await runHeavyTask();
+
+    const requestEnd = performance.now();
+
+    console.log(
+      `Total request duration: ${(requestEnd - requestStart).toFixed(2)} ms`,
+    );
+
+    console.log("=== HEAVY TASK FINISHED ===\n");
 
     res.writeHead(200, {
       "Content-Type": "application/json",
@@ -66,6 +93,10 @@ const serverA = http.createServer(async (req, res) => {
 
 const serverB = http.createServer((req, res) => {
   if (req.url === "/ping") {
+    const timestamp = performance.now();
+
+    console.log(`PING received at ${timestamp.toFixed(2)} ms`);
+
     res.writeHead(200, {
       "Content-Type": "application/json",
     });
@@ -73,7 +104,7 @@ const serverB = http.createServer((req, res) => {
     res.end(
       JSON.stringify({
         status: "alive",
-        time: Date.now(),
+        timestampMs: Number(timestamp.toFixed(2)),
       }),
     );
 
