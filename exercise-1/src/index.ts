@@ -35,54 +35,124 @@ import { Worker } from "node:worker_threads";
  * longer executes on the main thread.
  */
 
-function runHeavyTask(): Promise<unknown> {
+interface WorkerResult {
+  completed: boolean;
+  iterations: number;
+  durationMs: number;
+}
+
+function runHeavyTask(): Promise<WorkerResult> {
   return new Promise((resolve, reject) => {
     const workerPath =
       process.env.NODE_ENV === "production"
         ? path.resolve(__dirname, "worker.js")
         : path.resolve("src/worker.ts");
 
+    const lifecycleStart = performance.now();
+
     const worker = new Worker(workerPath);
 
-    const start = performance.now();
+    worker.once("message", (result: WorkerResult) => {
+      const lifecycleEnd = performance.now();
 
-    worker.on("message", (result) => {
-      const end = performance.now();
-
-      console.log(`Worker completed in ${(end - start).toFixed(2)} ms`);
+      console.log(
+        `[Main Thread] Worker lifecycle duration: ${(
+          lifecycleEnd - lifecycleStart
+        ).toFixed(2)} ms`,
+      );
 
       resolve(result);
+
+      worker.terminate().catch(console.error);
     });
 
-    worker.on("error", reject);
+    worker.once("error", (error) => {
+      reject(error);
+    });
+
+    worker.once("exit", (code) => {
+      if (code !== 0) {
+        console.error(`[Main Thread] Worker exited with code ${code}`);
+      }
+    });
   });
 }
 
+/**
+ * Heartbeat
+ *
+ * If the event loop is blocked, these messages stop.
+ * After moving work into a worker thread, they continue
+ * uninterrupted.
+ */
 setInterval(() => {
-  console.log(`Heartbeat: ${performance.now().toFixed(2)} ms`);
+  console.log(
+    `[Heartbeat] Event loop alive at ${performance.now().toFixed(2)} ms`,
+  );
 }, 1000);
 
 const serverA = http.createServer(async (req, res) => {
   if (req.url === "/heavy") {
-    console.log("\n=== HEAVY TASK STARTED ===");
+    console.log("\n=================================");
+    console.log("HEAVY TASK REQUEST RECEIVED");
+    console.log("=================================\n");
 
     const requestStart = performance.now();
 
-    const result = await runHeavyTask();
+    try {
+      const result = await runHeavyTask();
 
-    const requestEnd = performance.now();
+      const requestEnd = performance.now();
 
-    console.log(
-      `Total request duration: ${(requestEnd - requestStart).toFixed(2)} ms`,
-    );
+      console.log(
+        `[Main Thread] Worker computation duration: ${result.durationMs.toFixed(
+          2,
+        )} ms`,
+      );
 
-    console.log("=== HEAVY TASK FINISHED ===\n");
+      console.log(
+        `[Main Thread] Total request duration: ${(
+          requestEnd - requestStart
+        ).toFixed(2)} ms`,
+      );
 
-    res.writeHead(200, {
-      "Content-Type": "application/json",
-    });
+      console.log(
+        `[Main Thread] Iterations executed: ${result.iterations.toLocaleString()}`,
+      );
 
-    res.end(JSON.stringify(result));
+      console.log("\n=================================");
+      console.log("HEAVY TASK COMPLETED");
+      console.log("=================================\n");
+
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+      });
+
+      res.end(
+        JSON.stringify(
+          {
+            success: true,
+            ...result,
+            requestDurationMs: Number((requestEnd - requestStart).toFixed(2)),
+          },
+          null,
+          2,
+        ),
+      );
+    } catch (error) {
+      console.error("[Main Thread] Worker failed:", error);
+
+      res.writeHead(500, {
+        "Content-Type": "application/json",
+      });
+
+      res.end(
+        JSON.stringify({
+          success: false,
+          message: "Heavy task failed",
+        }),
+      );
+    }
 
     return;
   }
@@ -95,17 +165,21 @@ const serverB = http.createServer((req, res) => {
   if (req.url === "/ping") {
     const timestamp = performance.now();
 
-    console.log(`PING received at ${timestamp.toFixed(2)} ms`);
+    console.log(`[Server B] PING received at ${timestamp.toFixed(2)} ms`);
 
     res.writeHead(200, {
       "Content-Type": "application/json",
     });
 
     res.end(
-      JSON.stringify({
-        status: "alive",
-        timestampMs: Number(timestamp.toFixed(2)),
-      }),
+      JSON.stringify(
+        {
+          status: "alive",
+          timestampMs: Number(timestamp.toFixed(2)),
+        },
+        null,
+        2,
+      ),
     );
 
     return;
@@ -116,9 +190,9 @@ const serverB = http.createServer((req, res) => {
 });
 
 serverA.listen(3000, () => {
-  console.log("Server A running on 3000 - http://localhost:3000/heavy");
+  console.log("Server A running on http://localhost:3000/heavy");
 });
 
 serverB.listen(4000, () => {
-  console.log("Server B running on 4000 - http://localhost:4000/ping");
+  console.log("Server B running on http://localhost:4000/ping");
 });
