@@ -49,3 +49,16 @@ function getHealthData() {
     },
   };
 }
+
+function getMaskedEnvironmentVariables() {
+  const result: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(process.env)) {
+    const sensitive =
+      key.includes("SECRET") || key.includes("KEY") || key.includes("PASSWORD");
+
+    result[key] = sensitive ? "***" : String(value);
+  }
+
+  return result;
+}
