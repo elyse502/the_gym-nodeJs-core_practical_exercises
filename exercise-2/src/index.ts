@@ -62,3 +62,9 @@ function getMaskedEnvironmentVariables() {
 
   return result;
 }
+
+console.warn("[WARNING] Shutdown requested. Exiting in 3 seconds...");
+
+setTimeout(() => {
+  process.exit(1);
+}, 3000);
