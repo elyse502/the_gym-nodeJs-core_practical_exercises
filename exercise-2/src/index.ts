@@ -1,70 +1,62 @@
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
+import http from "node:http";
+import { parse } from "node:url";
 
-function bytesToMb(bytes: number): number {
-  return Number((bytes / 1024 / 1024).toFixed(2));
+import { getMaskedEnvironmentVariables } from "./env.js";
+import { getHealthData } from "./metrics.js";
+import { registerShutdownHooks, shutdown } from "./shutdown.js";
+
+registerShutdownHooks();
+
+/**
+ * Sends JSON responses consistently.
+ */
+function sendJson(
+  res: http.ServerResponse,
+  statusCode: number,
+  data: unknown,
+): void {
+  res.writeHead(statusCode, {
+    "Content-Type": "application/json",
+  });
+
+  res.end(JSON.stringify(data, null, 2));
 }
 
-const logsDir = path.resolve("logs");
+const server = http.createServer((req, res) => {
+  const { pathname } = parse(req.url || "/", true);
 
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
+  switch (pathname) {
+    case "/health":
+      sendJson(res, 200, getHealthData());
+      return;
 
-const logFile = path.join(logsDir, "server.log");
+    case "/env":
+      sendJson(res, 200, getMaskedEnvironmentVariables());
+      return;
 
-process.on("exit", () => {
-  const line = `server shut down at ${new Date().toISOString()}\n`;
+    case "/kill":
+      sendJson(res, 200, {
+        message: "Server shutting down in 3 seconds",
+      });
 
-  fs.appendFileSync(logFile, line);
+      shutdown();
+      return;
+
+    default:
+      sendJson(res, 404, {
+        error: "Route not found",
+      });
+  }
 });
 
-function getHealthData() {
-  const cpus = os.cpus();
-  const memory = process.memoryUsage();
+const PORT = 3000;
 
-  return {
-    system: {
-      totalMemoryMb: bytesToMb(os.totalmem()),
-      freeMemoryMb: bytesToMb(os.freemem()),
-      platform: process.platform,
-      osType: os.type(),
-    },
+server.listen(PORT, () => {
+  console.log(`Process Monitor running on http://localhost:${PORT}`);
 
-    cpu: {
-      cores: cpus.length,
-      model: cpus[0]?.model,
-    },
+  console.log(`Health endpoint: http://localhost:${PORT}/health`);
 
-    process: {
-      pid: process.pid,
-      uptimeSeconds: Number(process.uptime().toFixed(2)),
+  console.log(`Environment endpoint: http://localhost:${PORT}/env`);
 
-      memoryUsage: {
-        rssMb: bytesToMb(memory.rss),
-        heapUsedMb: bytesToMb(memory.heapUsed),
-        heapTotalMb: bytesToMb(memory.heapTotal),
-      },
-    },
-  };
-}
-
-function getMaskedEnvironmentVariables() {
-  const result: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(process.env)) {
-    const sensitive =
-      key.includes("SECRET") || key.includes("KEY") || key.includes("PASSWORD");
-
-    result[key] = sensitive ? "***" : String(value);
-  }
-
-  return result;
-}
-
-console.warn("[WARNING] Shutdown requested. Exiting in 3 seconds...");
-
-setTimeout(() => {
-  process.exit(1);
-}, 3000);
+  console.log(`Shutdown endpoint: http://localhost:${PORT}/kill`);
+});
