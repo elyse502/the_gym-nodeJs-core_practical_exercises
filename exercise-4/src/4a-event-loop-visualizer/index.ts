@@ -59,3 +59,16 @@ setImmediate(() => {
 });
 
 console.log("synchronous — main thread");
+
+// Additional work to visualize the event loop phases more clearly
+setImmediate(() => {
+  console.log("inside setImmediate");
+
+  Promise.resolve().then(() => {
+    console.log("Promise inside setImmediate");
+  });
+
+  process.nextTick(() => {
+    console.log("nextTick inside setImmediate");
+  });
+});
