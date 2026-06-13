@@ -1,12 +1,26 @@
 import { promises as fs } from "node:fs";
 
 /**
- * Reads JSON data from disk.
+ * Reads JSON data from disk safely.
  */
 export async function readJsonFile<T>(filePath: string): Promise<T> {
-  const content = await fs.readFile(filePath, "utf-8");
+  try {
+    const content = await fs.readFile(filePath, "utf-8");
 
-  return JSON.parse(content);
+    if (!content.trim()) {
+      return [] as T;
+    }
+
+    return JSON.parse(content);
+  } catch (err: any) {
+    if (err.code === "ENOENT") {
+      // file doesn't exist yet → create empty structure
+      await fs.writeFile(filePath, "[]");
+      return [] as T;
+    }
+
+    throw err;
+  }
 }
 
 /**
@@ -16,5 +30,7 @@ export async function writeJsonFile(
   filePath: string,
   data: unknown,
 ): Promise<void> {
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2));
+  const json = JSON.stringify(data, null, 2);
+
+  await fs.writeFile(filePath, json, "utf-8");
 }
