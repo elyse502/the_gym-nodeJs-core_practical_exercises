@@ -1,20 +1,16 @@
 import { EventEmitter } from "node:events";
 
 /**
- * Demonstrates deferred event emission.
+ * Simulates a component that loads data
+ * and emits a ready event.
  */
 class DataLoader extends EventEmitter {
   /**
-   * Loads data.
-   *
-   * The event is emitted after
-   * the current call stack completes.
+   * Loads data and immediately emits.
    */
   load(): void {
-    process.nextTick(() => {
-      this.emit("ready", {
-        data: "loaded",
-      });
+    this.emit("ready", {
+      data: "loaded",
     });
   }
 }
