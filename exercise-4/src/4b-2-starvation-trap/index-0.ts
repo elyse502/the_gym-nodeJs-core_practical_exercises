@@ -1,11 +1,13 @@
 import http from "node:http";
 
 /**
- * Demonstrates cooperative scheduling
- * using setImmediate.
+ * Demonstrates event-loop starvation
+ * caused by recursive process.nextTick().
  */
 function recursive(): void {
-  setImmediate(recursive);
+  //   console.log("running nextTick");
+
+  process.nextTick(recursive);
 }
 
 recursive();
