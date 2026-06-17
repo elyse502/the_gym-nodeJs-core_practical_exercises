@@ -5,16 +5,16 @@ const cache: Record<string, string> = {};
 /**
  * Retrieves data from cache or disk.
  *
- * Always asynchronous.
+ * BUG:
+ * Cache hits are synchronous.
+ * File reads are asynchronous.
  */
 function getData(
   key: string,
   callback: (error: Error | null, data?: string) => void,
 ): void {
   if (cache[key]) {
-    process.nextTick(() => {
-      callback(null, cache[key]);
-    });
+    callback(null, cache[key]);
 
     return;
   }
