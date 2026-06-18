@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx watch src/4b-5-control-order/index.ts",
+    "dev": "tsx watch src/4b-4-log-scheduling/server.ts",
     "build": "tsc",
     "start": "node dist/4a-event-loop-visualizer/index.js"
   },
