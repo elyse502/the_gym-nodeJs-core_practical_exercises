@@ -46,4 +46,4 @@ coverage/
 users.json
 
 # Ignore certificate files
-certs/*
+certs/
