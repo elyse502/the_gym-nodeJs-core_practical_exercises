@@ -2,7 +2,7 @@ import { Request } from "express";
 
 /**
  * Extends Express Request with custom properties
- * used throughout the middleware pipeline.
+ * used by application middleware.
  */
 export interface RequestWithUser extends Request {
   user?: {

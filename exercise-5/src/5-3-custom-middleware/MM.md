@@ -904,3 +904,473 @@ After that we'll wire everything together and implement the final `POST /data` r
 which completes Exercise 5.3.
 
 </details>
+
+<br/><hr/><br/>
+
+<details>
+  <summary><b>Last part</b></summary>
+
+Excellent.
+
+Now we build the final middleware in the chain.
+
+This middleware introduces a concept you'll see everywhere in Express, NestJS, Fastify, and many backend frameworks:
+
+> Middleware enriches the request object and passes information downstream.
+
+The route handler will not perform authentication itself.
+
+Instead:
+
+```txt
+Request
+   ↓
+Auth Middleware
+   ↓
+Attach User
+   ↓
+next()
+   ↓
+Route
+```
+
+The route simply consumes data that already exists on the request.
+
+---
+
+# Exercise 5.3 — Fake Auth Middleware
+
+## Goal
+
+Read:
+
+```http
+x-token: secret123
+```
+
+If valid:
+
+```ts
+req.user = {
+  name: "admin",
+};
+```
+
+Continue:
+
+```ts
+next();
+```
+
+Otherwise:
+
+```http
+401 Unauthorized
+```
+
+and stop the pipeline.
+
+---
+
+# Step 1 — Review Custom Request Type
+
+We already prepared this.
+
+## types/request-with-user.interface.ts
+
+```ts
+import { Request } from "express";
+
+/**
+ * Extends Express Request with custom properties
+ * used by application middleware.
+ */
+export interface RequestWithUser extends Request {
+  user?: {
+    name: string;
+  };
+
+  startTime?: number;
+}
+```
+
+---
+
+# Why We Need This
+
+Express's default Request type doesn't know about:
+
+```ts
+req.user;
+```
+
+Without this interface TypeScript will complain:
+
+```txt
+Property 'user' does not exist on type 'Request'
+```
+
+---
+
+# Step 2 — Create Middleware
+
+## middlewares/fake-auth.middleware.ts
+
+```ts
+import { Response, NextFunction } from "express";
+
+import { RequestWithUser } from "../types/request-with-user.interface.js";
+
+/**
+ * Simple authentication middleware.
+ *
+ * Validates x-token header and attaches
+ * a fake authenticated user to the request.
+ */
+export function fakeAuthMiddleware(
+  req: RequestWithUser,
+  res: Response,
+  next: NextFunction,
+): void {
+  const token = req.header("x-token");
+
+  if (token !== "secret123") {
+    res.status(401).json({
+      error: "Unauthorized",
+    });
+
+    return;
+  }
+
+  req.user = {
+    name: "admin",
+  };
+
+  next();
+}
+```
+
+---
+
+# Request Flow
+
+Valid request:
+
+```http
+POST /data
+x-token: secret123
+```
+
+Execution:
+
+```txt
+Auth Middleware
+     ↓
+Attach User
+     ↓
+next()
+     ↓
+Route
+```
+
+---
+
+Invalid request:
+
+```http
+POST /data
+```
+
+Execution:
+
+```txt
+Auth Middleware
+     ↓
+401
+     ↓
+STOP
+```
+
+Route never executes.
+
+---
+
+# Step 3 — Create Route Handler
+
+Instead of placing route logic directly in `index.ts`, let's maintain separation of concerns.
+
+---
+
+## routes/data.route.ts
+
+```ts
+import { Response } from "express";
+
+import { RequestWithUser } from "../types/request-with-user.interface.js";
+
+/**
+ * Handles POST /data.
+ *
+ * Returns the authenticated user and
+ * submitted request body.
+ */
+export function handleDataRoute(req: RequestWithUser, res: Response): void {
+  res.status(200).json({
+    user: req.user,
+    body: req.body,
+  });
+}
+```
+
+---
+
+# Step 4 — Wire Everything Together
+
+## index.ts
+
+```ts
+import express from "express";
+
+import { loggerMiddleware } from "./middlewares/logger.middleware.js";
+import { requestTimerMiddleware } from "./middlewares/request-timer.middleware.js";
+import { bodySizeGuardMiddleware } from "./middlewares/body-size-guard.middleware.js";
+import { fakeAuthMiddleware } from "./middlewares/fake-auth.middleware.js";
+
+import { handleDataRoute } from "./routes/data.route.js";
+
+const app = express();
+
+app.use(loggerMiddleware);
+
+app.use(requestTimerMiddleware);
+
+app.use(bodySizeGuardMiddleware);
+
+app.use(express.json());
+
+app.use(fakeAuthMiddleware);
+
+app.post("/data", handleDataRoute);
+
+app.listen(3000, () => {
+  console.log("Express server running on http://localhost:3000");
+});
+```
+
+---
+
+# Middleware Pipeline Visualization
+
+Successful request:
+
+```txt
+Request
+  ↓
+Logger
+  ↓
+Request Timer
+  ↓
+Body Size Guard
+  ↓
+express.json()
+  ↓
+Fake Auth
+  ↓
+Route
+  ↓
+Response
+```
+
+---
+
+Unauthorized request:
+
+```txt
+Request
+  ↓
+Logger
+  ↓
+Request Timer
+  ↓
+Body Size Guard
+  ↓
+express.json()
+  ↓
+Fake Auth
+  ↓
+401
+  ↓
+STOP
+```
+
+---
+
+Oversized request:
+
+```txt
+Request
+  ↓
+Logger
+  ↓
+Request Timer
+  ↓
+Body Size Guard
+  ↓
+413
+  ↓
+STOP
+```
+
+---
+
+# Test Cases
+
+## Test 1 — Success
+
+Headers:
+
+```http
+x-token: secret123
+Content-Type: application/json
+```
+
+Body:
+
+```json
+{
+  "message": "hello"
+}
+```
+
+Response:
+
+```json
+{
+  "user": {
+    "name": "admin"
+  },
+  "body": {
+    "message": "hello"
+  }
+}
+```
+
+---
+
+## Test 2 — Unauthorized
+
+Missing:
+
+```http
+x-token
+```
+
+Response:
+
+```json
+{
+  "error": "Unauthorized"
+}
+```
+
+Status:
+
+```http
+401 Unauthorized
+```
+
+---
+
+## Test 3 — Invalid Token
+
+```http
+x-token: wrong-token
+```
+
+Response:
+
+```json
+{
+  "error": "Unauthorized"
+}
+```
+
+Status:
+
+```http
+401 Unauthorized
+```
+
+---
+
+## Test 4 — Payload Too Large
+
+Body size:
+
+```txt
+> 1024 bytes
+```
+
+Response:
+
+```json
+{
+  "error": "Payload Too Large",
+  "maxSizeBytes": 1024
+}
+```
+
+Status:
+
+```http
+413 Payload Too Large
+```
+
+---
+
+# What You've Learned
+
+This middleware demonstrates a pattern used throughout backend systems:
+
+Authentication middleware:
+
+```ts
+req.user;
+```
+
+Authorization middleware:
+
+```ts
+req.permissions;
+```
+
+Tenant middleware:
+
+```ts
+req.tenant;
+```
+
+Localization middleware:
+
+```ts
+req.language;
+```
+
+Request-scoped context often starts in middleware and travels through the rest of the request lifecycle.
+
+---
+
+## Next: Exercise 5.4 — Bridge Question
+
+This is the architectural piece.
+
+We'll dissect:
+
+- What a middleware pipeline really is
+- What `next()` actually does
+- How Express builds the chain
+- How you'd implement the same mechanism manually using pure `https.createServer()`
+
+That exercise ties together everything you've built in 5.2 and 5.3.
+
+</details>
