@@ -503,3 +503,404 @@ next();
 which is one of the most fundamental ideas behind Express.
 
 </details>
+
+<br/><hr/><br/>
+
+<details>
+  <summary><b>Third part</b></summary>
+
+Great. Now we reach the first middleware that can terminate the request pipeline.
+
+Up to now:
+
+```txt
+Logger
+   ↓
+Timer
+   ↓
+Route
+```
+
+Every middleware called:
+
+```ts
+next();
+```
+
+and allowed execution to continue.
+
+The Body Size Guard introduces a new pattern:
+
+```txt
+Middleware
+   ↓
+Validation Fails
+   ↓
+Return Response
+   ↓
+STOP PIPELINE
+```
+
+The route handler never executes.
+
+---
+
+# Exercise 5.3 — Body Size Guard Middleware
+
+## Goal
+
+Reject requests larger than 1 KB before they reach the route.
+
+Requirement:
+
+```txt
+Content-Length > 1024
+```
+
+Return:
+
+```http
+413 Payload Too Large
+```
+
+---
+
+# Why Check Content-Length?
+
+When a client sends a request:
+
+```http
+POST /data
+
+Content-Length: 5000
+```
+
+Node receives metadata before reading the body.
+
+This allows us to reject oversized requests early.
+
+---
+
+# Folder Structure
+
+```text
+src/5-3-custom-middleware/
+│
+├── middlewares/
+│   ├── logger.middleware.ts
+│   ├── request-timer.middleware.ts
+│   └── body-size-guard.middleware.ts
+│
+└── index.ts
+```
+
+---
+
+# Step 1 — Create Middleware
+
+## middlewares/body-size-guard.middleware.ts
+
+```ts
+import { Request, Response, NextFunction } from "express";
+
+/**
+ * Rejects requests larger than 1 KB.
+ *
+ * Uses the Content-Length header supplied
+ * by the client before the body is processed.
+ */
+export function bodySizeGuardMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const contentLength = Number(req.headers["content-length"] ?? 0);
+
+  const MAX_BODY_SIZE = 1024;
+
+  if (contentLength > MAX_BODY_SIZE) {
+    res.status(413).json({
+      error: "Payload Too Large",
+      maxSizeBytes: MAX_BODY_SIZE,
+    });
+
+    return;
+  }
+
+  next();
+}
+```
+
+---
+
+# Step 2 — Register Middleware
+
+Update:
+
+## index.ts
+
+```ts
+import express from "express";
+
+import { loggerMiddleware } from "./middlewares/logger.middleware.js";
+import { requestTimerMiddleware } from "./middlewares/request-timer.middleware.js";
+import { bodySizeGuardMiddleware } from "./middlewares/body-size-guard.middleware.js";
+
+const app = express();
+
+app.use(loggerMiddleware);
+
+app.use(requestTimerMiddleware);
+
+app.use(bodySizeGuardMiddleware);
+
+app.use(express.json());
+
+app.post("/data", (_req, res) => {
+  res.json({
+    success: true,
+  });
+});
+
+app.listen(3000, () => {
+  console.log("Server running on port 3000");
+});
+```
+
+---
+
+# Important Ordering Discussion
+
+Notice:
+
+```ts
+app.use(bodySizeGuardMiddleware);
+
+app.use(express.json());
+```
+
+Body guard runs first.
+
+Why?
+
+Because:
+
+```ts
+express.json();
+```
+
+must parse the body.
+
+Parsing large payloads consumes memory and CPU.
+
+We want:
+
+```txt
+Reject
+Before
+Parsing
+```
+
+not:
+
+```txt
+Parse
+Then
+Reject
+```
+
+---
+
+# Test 1 — Valid Request
+
+Body:
+
+```json
+{
+  "message": "hello"
+}
+```
+
+Response:
+
+```json
+{
+  "success": true
+}
+```
+
+---
+
+# Test 2 — Oversized Request
+
+Create a payload larger than:
+
+```txt
+1024 bytes
+```
+
+Example:
+
+```json
+{
+  "data": "xxxxxxxxxxxxxxxx..."
+}
+```
+
+Response:
+
+```json
+{
+  "error": "Payload Too Large",
+  "maxSizeBytes": 1024
+}
+```
+
+Status:
+
+```http
+413
+```
+
+---
+
+# Event Flow (Success)
+
+```txt
+Request
+ ↓
+Logger
+ ↓
+Timer
+ ↓
+Body Guard
+ ↓
+express.json()
+ ↓
+Route
+ ↓
+Response
+```
+
+---
+
+# Event Flow (Failure)
+
+```txt
+Request
+ ↓
+Logger
+ ↓
+Timer
+ ↓
+Body Guard
+ ↓
+413 Response
+ ↓
+STOP
+```
+
+Route never executes.
+
+---
+
+# This Is The Core Express Pattern
+
+Middleware decides:
+
+Option 1:
+
+```ts
+next();
+```
+
+Continue.
+
+---
+
+Option 2:
+
+```ts
+res.status(...).json(...);
+return;
+```
+
+Terminate.
+
+---
+
+This pattern powers:
+
+- Authentication
+- Authorization
+- Validation
+- Rate limiting
+- CSRF protection
+- API key verification
+
+---
+
+# Real World Example
+
+JWT Middleware:
+
+```ts
+if (!token) {
+  return res.status(401).json({
+    error: "Unauthorized",
+  });
+}
+
+next();
+```
+
+Exactly the same pattern.
+
+---
+
+# Small Improvement
+
+To avoid magic numbers:
+
+```ts
+const MAX_BODY_SIZE_BYTES = 1024;
+```
+
+instead of:
+
+```ts
+1024;
+```
+
+throughout the file.
+
+Makes maintenance easier.
+
+---
+
+## Next Step
+
+We'll build the final middleware:
+
+### Fake Auth Middleware
+
+This one introduces:
+
+- Request augmentation
+- Attaching custom data to `req`
+- Authentication flow
+- HTTP 401 responses
+- Type-safe custom request properties
+
+After that we'll wire everything together and implement the final `POST /data` route that echoes both:
+
+```json
+{
+  "body": {},
+  "user": {}
+}
+```
+
+which completes Exercise 5.3.
+
+</details>

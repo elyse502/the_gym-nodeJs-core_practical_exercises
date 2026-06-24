@@ -2,18 +2,22 @@ import express from "express";
 
 import { loggerMiddleware } from "./middlewares/logger.middleware.js";
 import { requestTimerMiddleware } from "./middlewares/request-timer.middleware.js";
+import { bodySizeGuardMiddleware } from "./middlewares/body-size-guard.middleware.js";
 
 const app = express();
 
 app.use(loggerMiddleware);
+
 app.use(requestTimerMiddleware);
 
+app.use(bodySizeGuardMiddleware);
+
+app.use(express.json());
+
 app.post("/data", (_req, res) => {
-  setTimeout(() => {
-    res.json({
-      success: true,
-    });
-  }, 1000);
+  res.json({
+    success: true,
+  });
 });
 
 app.listen(3000, () => {
