@@ -1239,3 +1239,361 @@ git commit -m "feat(exercise-6): implement manual HTTP router
 We'll build the **User Repository**, which abstracts all interactions with `users.json`. This repository will expose methods like `findByEmail`, `findById`, `create`, `update`, `delete`, and `getAll`, keeping file I/O separate from business logic. This separation will also make the upcoming race condition analysis and write-lock implementation much easier to understand.
 
 </details>
+
+<br/><hr/><br/>
+
+<details>
+    <summary><b>Fourth phase</b></summary>
+
+Excellent. This is where the project begins to resemble a real backend application.
+
+From this point forward, every controller will communicate with a repository instead of reading and writing JSON files directly.
+
+This is the same architectural pattern used in applications backed by databases.
+
+```text
+Controller
+      │
+      ▼
+Repository
+      │
+      ▼
+JSON File
+
+(Later in real applications)
+
+Controller
+      │
+      ▼
+Repository
+      │
+      ▼
+PostgreSQL / MongoDB / MySQL
+```
+
+Notice that the controller doesn't care where the data comes from.
+
+---
+
+# Step 6 — Build the User Repository
+
+## Why a Repository?
+
+Suppose we didn't use one.
+
+Every controller would contain this:
+
+```ts
+const users = JSON.parse(
+  await fs.readFile(...)
+);
+
+// business logic
+
+await fs.writeFile(...)
+```
+
+Now imagine six controllers doing the same thing.
+
+You'd duplicate:
+
+- Reading files
+- Parsing JSON
+- Writing JSON
+- Error handling
+
+Instead we centralize all persistence logic.
+
+---
+
+# Project Structure
+
+Create:
+
+```text
+src/
+│
+├── repositories/
+│      user.repository.ts
+│
+├── utils/
+│      json-file.ts
+```
+
+We'll first build reusable JSON file helpers.
+
+---
+
+# Step 1 — JSON File Helpers
+
+## utils/json-file.ts
+
+```ts
+import { promises as fs } from "node:fs";
+
+/**
+ * Reads and parses a JSON file.
+ *
+ * @param filePath Absolute or relative path to the JSON file.
+ * @returns Parsed JSON data.
+ */
+export async function readJsonFile<T>(filePath: string): Promise<T> {
+  const content = await fs.readFile(filePath, "utf8");
+
+  return JSON.parse(content) as T;
+}
+
+/**
+ * Writes JSON data to a file.
+ *
+ * @param filePath Destination file path.
+ * @param data Data to serialize.
+ */
+export async function writeJsonFile(
+  filePath: string,
+  data: unknown,
+): Promise<void> {
+  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+```
+
+---
+
+## Why Generic Types?
+
+Notice:
+
+```ts
+readJsonFile<T>();
+```
+
+This allows the caller to decide what type is expected.
+
+Example:
+
+```ts
+const users =
+  await readJsonFile<User[]>(...);
+```
+
+or
+
+```ts
+const sessions =
+  await readJsonFile<Session[]>(...);
+```
+
+One helper works everywhere.
+
+---
+
+# Step 2 — Repository Constants
+
+Create:
+
+## constants/file-paths.ts
+
+```ts
+import path from "node:path";
+
+/**
+ * Absolute paths to application data files.
+ */
+export const USERS_FILE = path.resolve("data", "users.json");
+
+export const SESSIONS_FILE = path.resolve("data", "sessions.json");
+```
+
+Why?
+
+Avoid scattering string paths throughout the codebase.
+
+---
+
+# Step 3 — Create Repository
+
+## repositories/user.repository.ts
+
+```ts
+import { User } from "../types/user.interface.js";
+
+import { readJsonFile, writeJsonFile } from "../utils/json-file.js";
+
+import { USERS_FILE } from "../constants/file-paths.js";
+
+/**
+ * Handles all persistence operations
+ * for users.json.
+ */
+export class UserRepository {
+  /**
+   * Returns every stored user.
+   */
+  async findAll(): Promise<User[]> {
+    return readJsonFile<User[]>(USERS_FILE);
+  }
+
+  /**
+   * Finds a user by ID.
+   */
+  async findById(id: string): Promise<User | undefined> {
+    const users = await this.findAll();
+
+    return users.find((user) => user.id === id);
+  }
+
+  /**
+   * Finds a user by email.
+   */
+  async findByEmail(email: string): Promise<User | undefined> {
+    const users = await this.findAll();
+
+    return users.find((user) => user.email === email);
+  }
+
+  /**
+   * Persists the complete collection.
+   */
+  async saveAll(users: User[]): Promise<void> {
+    await writeJsonFile(USERS_FILE, users);
+  }
+
+  /**
+   * Creates a new user.
+   */
+  async create(user: User): Promise<void> {
+    const users = await this.findAll();
+
+    users.push(user);
+
+    await this.saveAll(users);
+  }
+
+  /**
+   * Updates an existing user.
+   */
+  async update(updatedUser: User): Promise<void> {
+    const users = await this.findAll();
+
+    const updatedUsers = users.map((user) =>
+      user.id === updatedUser.id ? updatedUser : user,
+    );
+
+    await this.saveAll(updatedUsers);
+  }
+
+  /**
+   * Deletes a user.
+   */
+  async delete(id: string): Promise<void> {
+    const users = await this.findAll();
+
+    const remainingUsers = users.filter((user) => user.id !== id);
+
+    await this.saveAll(remainingUsers);
+  }
+}
+```
+
+---
+
+# Why Not Export Plain Functions?
+
+We could have written:
+
+```ts
+findAll();
+
+findByEmail();
+
+findById();
+```
+
+Using a class groups all persistence operations together.
+
+Later, if you switch from JSON files to PostgreSQL, only this repository changes.
+
+Your controllers remain unchanged.
+
+This follows the Repository Pattern.
+
+---
+
+# Repository Responsibilities
+
+The repository should only answer questions about storage.
+
+Examples:
+
+✔ Read all users.
+
+✔ Find a user by email.
+
+✔ Save users.
+
+✔ Delete users.
+
+It should never decide:
+
+- Who is allowed to update?
+- Whether a password matches?
+- Whether a request is authenticated?
+
+Those are business rules handled by services or controllers.
+
+---
+
+# Mental Model
+
+```text
+HTTP Request
+      │
+      ▼
+Controller
+      │
+      ▼
+UserRepository
+      │
+      ▼
+users.json
+```
+
+The controller doesn't know whether data comes from:
+
+- JSON
+- SQLite
+- PostgreSQL
+- MongoDB
+- Redis
+
+It only calls repository methods.
+
+---
+
+# Quick Test
+
+Although no controller uses it yet, you can verify the repository in a temporary script:
+
+```ts
+const repository = new UserRepository();
+
+const users = await repository.findAll();
+
+console.log(users);
+```
+
+You should see:
+
+```json
+[]
+```
+
+assuming `users.json` still contains an empty array.
+
+---
+
+## Next Step
+
+We'll build the **Session Repository**, which mirrors the `UserRepository` but manages `sessions.json`. With both repositories in place, we'll implement registration and login using password hashing, UUID generation, and persistent session storage. This also prepares the foundation for `authenticate(req)` and all protected routes.
+
+</details>
