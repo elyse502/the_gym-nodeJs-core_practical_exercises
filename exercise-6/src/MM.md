@@ -1597,3 +1597,336 @@ assuming `users.json` still contains an empty array.
 We'll build the **Session Repository**, which mirrors the `UserRepository` but manages `sessions.json`. With both repositories in place, we'll implement registration and login using password hashing, UUID generation, and persistent session storage. This also prepares the foundation for `authenticate(req)` and all protected routes.
 
 </details>
+
+<br/><hr/><br/>
+
+<details>
+  <summary><b>Fifth phase</b></summary>
+
+Excellent. We're now building the second half of the persistence layer.
+
+After this step, the project has everything needed to support authentication.
+
+Just like `UserRepository` encapsulates all user storage, `SessionRepository` will encapsulate all session storage.
+
+This symmetry is intentional. Good architectures strive for consistency.
+
+---
+
+# Step 7 — Build the Session Repository
+
+## What is a Session?
+
+When a user logs in successfully, we don't want them to send their email and password with every request.
+
+Instead:
+
+```text
+Login
+   │
+   ▼
+Verify credentials
+   │
+   ▼
+Generate session token
+   │
+   ▼
+Store session
+   │
+   ▼
+Return token
+```
+
+Subsequent requests look like:
+
+```http
+GET /me
+x-session-token: 7d6d2d5c-...
+```
+
+The server checks whether that token exists and maps it back to a user.
+
+---
+
+# Session Flow
+
+```text
+Client
+   │
+   │ Login
+   ▼
+Server
+   │
+   ▼
+sessions.json
+
+[
+  {
+    token,
+    userId,
+    createdAt
+  }
+]
+
+      ▲
+      │
+Future Requests
+      │
+x-session-token
+```
+
+---
+
+# Project Structure
+
+We already have:
+
+```text
+src/
+├── repositories/
+│      user.repository.ts
+```
+
+Now add:
+
+```text
+src/
+├── repositories/
+│      session.repository.ts
+```
+
+---
+
+# Session Repository
+
+## repositories/session.repository.ts
+
+```ts
+import { Session } from "../types/session.interface.js";
+
+import { readJsonFile, writeJsonFile } from "../utils/json-file.js";
+
+import { SESSIONS_FILE } from "../constants/file-paths.js";
+
+/**
+ * Handles all persistence operations
+ * for sessions.json.
+ */
+export class SessionRepository {
+  /**
+   * Returns every stored session.
+   */
+  async findAll(): Promise<Session[]> {
+    return readJsonFile<Session[]>(SESSIONS_FILE);
+  }
+
+  /**
+   * Finds a session by token.
+   */
+  async findByToken(token: string): Promise<Session | undefined> {
+    const sessions = await this.findAll();
+
+    return sessions.find((session) => session.token === token);
+  }
+
+  /**
+   * Persists the complete session collection.
+   */
+  async saveAll(sessions: Session[]): Promise<void> {
+    await writeJsonFile(SESSIONS_FILE, sessions);
+  }
+
+  /**
+   * Creates a new session.
+   */
+  async create(session: Session): Promise<void> {
+    const sessions = await this.findAll();
+
+    sessions.push(session);
+
+    await this.saveAll(sessions);
+  }
+
+  /**
+   * Removes a session by token.
+   */
+  async deleteByToken(token: string): Promise<void> {
+    const sessions = await this.findAll();
+
+    const remainingSessions = sessions.filter(
+      (session) => session.token !== token,
+    );
+
+    await this.saveAll(remainingSessions);
+  }
+
+  /**
+   * Removes every session
+   * belonging to a user.
+   */
+  async deleteByUserId(userId: string): Promise<void> {
+    const sessions = await this.findAll();
+
+    const remainingSessions = sessions.filter(
+      (session) => session.userId !== userId,
+    );
+
+    await this.saveAll(remainingSessions);
+  }
+}
+```
+
+---
+
+# Repository Responsibilities
+
+Notice how similar this is to `UserRepository`.
+
+That's intentional.
+
+A repository should expose operations that naturally belong to the stored entity.
+
+For sessions:
+
+```ts
+findByToken();
+
+create();
+
+deleteByToken();
+
+deleteByUserId();
+```
+
+For users:
+
+```ts
+findByEmail()
+
+findById()
+
+create()
+
+update()
+
+delete()
+```
+
+---
+
+# Mental Model
+
+```text
+Controller
+      │
+      ▼
+SessionRepository
+      │
+      ▼
+sessions.json
+```
+
+The controller never touches the JSON file directly.
+
+---
+
+# Example `sessions.json`
+
+Initially:
+
+```json
+[]
+```
+
+After one login:
+
+```json
+[
+  {
+    "token": "7a2f7b47-5d4b-4c89-9a4d-d5e4d52a8e15",
+    "userId": "db3d3e2a-ff66-4f86-bb63-4f95e55c43e1",
+    "createdAt": "2026-06-28T10:15:30.452Z"
+  }
+]
+```
+
+After another login from the same user:
+
+```json
+[
+  {
+    "token": "first-token",
+    "userId": "123",
+    "createdAt": "..."
+  },
+  {
+    "token": "second-token",
+    "userId": "123",
+    "createdAt": "..."
+  }
+]
+```
+
+This means the same user is logged in from two different sessions.
+
+That's acceptable for this exercise.
+
+---
+
+# Why Delete All Sessions on User Deletion?
+
+Imagine:
+
+```text
+User deleted
+```
+
+but:
+
+```json
+sessions.json
+
+[
+  {
+    "token": "...",
+    "userId": "deleted-user"
+  }
+]
+```
+
+Now you have orphaned sessions.
+
+Deleting all sessions belonging to the user keeps the data consistent.
+
+---
+
+# Looking Ahead
+
+The next step is `authenticate(req)`.
+
+Its logic will be surprisingly small because the repositories already provide everything it needs:
+
+```text
+Read header
+      │
+      ▼
+Find session
+      │
+      ▼
+Find user
+      │
+      ▼
+Return user
+```
+
+That's one of the benefits of clean architecture: each layer stays focused on a single responsibility.
+
+---
+
+## Next Step
+
+We'll implement the `authenticate(request)` helper. This will be the first reusable authentication component in the application and will be used by every protected route (`/logout`, `/users`, `/users/:id`, and `/me`). It will also give you a clear understanding of how session-based authentication works under the hood before frameworks like Express or Passport abstract it away.
+
+</details>
+
+<br/><hr/><br/>
