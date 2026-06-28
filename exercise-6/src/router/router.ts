@@ -6,7 +6,7 @@ import { notImplemented } from "../controllers/placeholder.controller.js";
 
 import { registerUser } from "../controllers/user.controller.js";
 
-import { loginUser } from "../controllers/auth.controller.js";
+import { loginUser, logoutUser } from "../controllers/auth.controller.js";
 
 /**
  * Represents a matched route.
@@ -69,7 +69,7 @@ export async function router(
       return await loginUser(request, response);
 
     case "POST:/logout":
-      return notImplemented(request, response);
+      return await logoutUser(request, response);
 
     case "GET:/users":
       return notImplemented(request, response);

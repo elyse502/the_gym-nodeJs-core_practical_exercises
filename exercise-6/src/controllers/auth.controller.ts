@@ -6,7 +6,12 @@ import { sendJson } from "../utils/send-json.js";
 
 import { UserService } from "../services/user.service.js";
 
+import { authenticate } from "../services/authentication.service.js";
+import { SessionRepository } from "../repositories/session.repository.js";
+
 const userService = new UserService();
+
+const sessionRepository = new SessionRepository();
 
 /**
  * Handles user login.
@@ -47,4 +52,27 @@ export async function loginUser(
 
     sendError(response, 500, "Internal Server Error");
   }
+}
+
+/**
+ * Logs out the authenticated user by
+ * deleting the current session.
+ */
+export async function logoutUser(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const auth = await authenticate(request);
+
+  if (!auth) {
+    sendError(response, 401, "Unauthorized");
+
+    return;
+  }
+
+  await sessionRepository.deleteByToken(auth.session.token);
+
+  sendJson(response, 200, {
+    message: "logged out",
+  });
 }

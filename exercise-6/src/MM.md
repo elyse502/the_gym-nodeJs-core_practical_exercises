@@ -3215,3 +3215,423 @@ That endpoint will introduce your first protected route. It will use the `authen
 </details>
 
 <br/><hr/><br/>
+
+<details>
+  <summary><b>Nineth phase</b></summary>
+
+Excellent. From this point onward, you're moving from "public" endpoints into "protected" endpoints.
+
+This is an important milestone because every protected endpoint from now on will reuse the authentication service you built earlier.
+
+This is exactly why we separated authentication into its own service.
+
+Instead of rewriting authentication logic repeatedly, every controller simply asks:
+
+```ts
+const auth = await authenticate(request);
+```
+
+and proceeds only if authentication succeeds.
+
+---
+
+# Step 11 — Implement Logout
+
+## Goal
+
+Implement:
+
+```http
+POST /logout
+```
+
+Requirements:
+
+- Protected route.
+- Read the `x-session-token` header.
+- Authenticate the request.
+- Remove the session from `sessions.json`.
+- Return:
+
+```json
+{
+  "message": "logged out"
+}
+```
+
+After logout, using the same token must return `401 Unauthorized`.
+
+---
+
+# Request Flow
+
+```text
+Incoming Request
+       │
+       ▼
+authenticate()
+       │
+       ▼
+Valid Session?
+       │
+ ┌─────┴──────┐
+ │            │
+No           Yes
+ │            │
+ ▼            ▼
+401      Delete Session
+              │
+              ▼
+      Return Success
+```
+
+---
+
+# Step 1 — Extend Authentication Controller
+
+Open:
+
+```text
+controllers/auth.controller.ts
+```
+
+Add these imports:
+
+```ts
+import { authenticate } from "../services/authentication.service.js";
+import { SessionRepository } from "../repositories/session.repository.js";
+```
+
+Create the repository instance:
+
+```ts
+const sessionRepository = new SessionRepository();
+```
+
+---
+
+# Step 2 — Implement `logoutUser`
+
+Add the following function.
+
+```ts
+/**
+ * Logs out the authenticated user by
+ * deleting the current session.
+ */
+export async function logoutUser(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const auth = await authenticate(request);
+
+  if (!auth) {
+    sendError(response, 401, "Unauthorized");
+
+    return;
+  }
+
+  await sessionRepository.deleteByToken(auth.session.token);
+
+  sendJson(response, 200, {
+    message: "logged out",
+  });
+}
+```
+
+Notice how small this controller is.
+
+Almost all of the work has already been done by previous layers.
+
+---
+
+# Why Don't We Read the Header Again?
+
+Some beginners write this:
+
+```ts
+const token = request.headers["x-session-token"];
+```
+
+again inside the controller.
+
+That duplicates work.
+
+`authenticate()` has already:
+
+- read the header
+- validated it
+- found the session
+
+Since it returns both:
+
+```ts
+auth.user;
+
+auth.session;
+```
+
+we reuse the existing data.
+
+---
+
+# Step 3 — Connect the Router
+
+Replace:
+
+```ts
+case "POST:/logout":
+    return notImplemented(request, response);
+```
+
+with
+
+```ts
+case "POST:/logout":
+    return logoutUser(request, response);
+```
+
+Import:
+
+```ts
+import { loginUser, logoutUser } from "../controllers/auth.controller.js";
+```
+
+---
+
+# Test Sequence
+
+## 1. Register
+
+```http
+POST /register
+```
+
+Response:
+
+```http
+201 Created
+```
+
+---
+
+## 2. Login
+
+```http
+POST /login
+```
+
+Response:
+
+```json
+{
+  "token": "abc123"
+}
+```
+
+Save the token.
+
+---
+
+## 3. Logout
+
+```http
+POST /logout
+```
+
+Headers
+
+```http
+x-session-token: abc123
+```
+
+Expected
+
+```http
+200 OK
+```
+
+```json
+{
+  "message": "logged out"
+}
+```
+
+---
+
+## sessions.json
+
+Before:
+
+```json
+[
+  {
+    "token": "abc123",
+    "userId": "123",
+    "createdAt": "..."
+  }
+]
+```
+
+After:
+
+```json
+[]
+```
+
+---
+
+## Logout Again
+
+Send exactly the same request.
+
+```http
+POST /logout
+```
+
+Headers
+
+```http
+x-session-token: abc123
+```
+
+Expected
+
+```http
+401 Unauthorized
+```
+
+because the session no longer exists.
+
+---
+
+# Why Does Logout Work?
+
+Nothing magical happens.
+
+Logging out simply deletes the server-side session.
+
+Before:
+
+```text
+Token
+   │
+   ▼
+Session exists
+   │
+   ▼
+Authenticated
+```
+
+After deletion:
+
+```text
+Token
+   │
+   ▼
+Session lookup
+   │
+   ▼
+Not found
+   │
+   ▼
+401 Unauthorized
+```
+
+The client still has the token, but it has become meaningless because the server no longer recognizes it.
+
+This illustrates an important concept:
+
+> Authentication is determined by the server's session store, not by the existence of the token on the client.
+
+---
+
+# Mental Model
+
+```text
+POST /logout
+        │
+        ▼
+authenticate()
+        │
+        ▼
+AuthenticationResult
+        │
+        ▼
+deleteByToken()
+        │
+        ▼
+sessions.json
+        │
+        ▼
+Return Success
+```
+
+Notice how each layer has a clear responsibility.
+
+```
+Controller
+```
+
+Coordinates the request.
+
+```
+Authentication Service
+```
+
+Verifies identity.
+
+```
+Session Repository
+```
+
+Removes persisted session data.
+
+---
+
+# Code Reuse
+
+The authentication service is now reusable by every protected endpoint.
+
+Soon you'll write:
+
+```ts
+const auth =
+    await authenticate(request);
+
+if (!auth) {
+    ...
+}
+```
+
+for:
+
+- `/users`
+- `/users/:id`
+- `/me`
+- `/users/:id (PUT)`
+- `/users/:id (DELETE)`
+
+without duplicating authentication logic.
+
+This is one of the biggest advantages of separating business logic into services.
+
+---
+
+# Looking Ahead
+
+The next endpoint is `GET /users`.
+
+This introduces:
+
+- protected routes
+- sanitizing user data
+- filtering by query parameters
+- manual parsing of query strings with the `url` module
+- returning collections safely without exposing passwords
+
+It also demonstrates why repositories should expose reusable querying methods rather than forcing controllers to manipulate raw data.
+
+</details>
+
+<br/><hr/><br/>
