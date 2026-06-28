@@ -1,10 +1,14 @@
 import crypto from "node:crypto";
 
 import { UserRepository } from "../repositories/user.repository.js";
-
 import { User } from "../types/user.interface.js";
 
+import { SessionRepository } from "../repositories/session.repository.js";
+import { Session } from "../types/session.interface.js";
+
 const userRepository = new UserRepository();
+
+const sessionRepository = new SessionRepository();
 
 /**
  * Handles business logic related to users.
@@ -44,5 +48,41 @@ export class UserService {
     const { password: _, ...safeUser } = user;
 
     return safeUser;
+  }
+
+  /**
+   * Authenticates a user and creates
+   * a new session.
+   *
+   * @throws Error when credentials
+   * are invalid.
+   */
+  async login(email: string, password: string): Promise<{ token: string }> {
+    const user = await userRepository.findByEmail(email);
+
+    if (!user) {
+      throw new Error("INVALID_CREDENTIALS");
+    }
+
+    const hashedPassword = crypto
+      .createHash("sha256")
+      .update(password)
+      .digest("hex");
+
+    if (hashedPassword !== user.password) {
+      throw new Error("INVALID_CREDENTIALS");
+    }
+
+    const session: Session = {
+      token: crypto.randomUUID(),
+      userId: user.id,
+      createdAt: new Date().toISOString(),
+    };
+
+    await sessionRepository.create(session);
+
+    return {
+      token: session.token,
+    };
   }
 }

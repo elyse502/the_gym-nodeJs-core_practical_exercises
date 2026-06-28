@@ -2758,3 +2758,460 @@ That token will then unlock every protected route in the rest of the exercise.
 </details>
 
 <br/><hr/><br/>
+
+<details>
+  <summary><b>Eighth phase</b></summary>
+
+Excellent. This is the second major feature of the application.
+
+After this step, you'll have a complete authentication flow:
+
+```text
+Register
+    │
+    ▼
+users.json
+
+        │
+        ▼
+Login
+        │
+        ▼
+Verify credentials
+        │
+        ▼
+Create session
+        │
+        ▼
+sessions.json
+        │
+        ▼
+Return token
+        │
+        ▼
+Authenticated requests
+```
+
+This is essentially how session-based authentication works in many production systems, although production systems typically store sessions in databases or caches like Redis instead of JSON files.
+
+---
+
+# Step 10 — Implement Login
+
+## Goal
+
+Implement:
+
+```http
+POST /login
+```
+
+Request:
+
+```json
+{
+  "email": "elysee@example.com",
+  "password": "123456"
+}
+```
+
+Response:
+
+```json
+{
+  "token": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+The token will be sent with every protected request.
+
+---
+
+# What Happens During Login?
+
+```text
+Receive email/password
+          │
+          ▼
+Find user by email
+          │
+          ▼
+Hash supplied password
+          │
+          ▼
+Compare hashes
+          │
+          ▼
+Generate session token
+          │
+          ▼
+Save session
+          │
+          ▼
+Return token
+```
+
+---
+
+# Step 1 — Extend the User Service
+
+## services/user.service.ts
+
+Add the following imports:
+
+```ts
+import { SessionRepository } from "../repositories/session.repository.js";
+import { Session } from "../types/session.interface.js";
+```
+
+Create a repository instance:
+
+```ts
+const sessionRepository = new SessionRepository();
+```
+
+---
+
+Add this method inside `UserService`.
+
+```ts
+/**
+ * Authenticates a user and creates
+ * a new session.
+ *
+ * @throws Error when credentials
+ * are invalid.
+ */
+async login(
+  email: string,
+  password: string,
+): Promise<{ token: string }> {
+  const user =
+    await userRepository.findByEmail(email);
+
+  if (!user) {
+    throw new Error("INVALID_CREDENTIALS");
+  }
+
+  const hashedPassword = crypto
+    .createHash("sha256")
+    .update(password)
+    .digest("hex");
+
+  if (hashedPassword !== user.password) {
+    throw new Error("INVALID_CREDENTIALS");
+  }
+
+  const session: Session = {
+    token: crypto.randomUUID(),
+    userId: user.id,
+    createdAt: new Date().toISOString(),
+  };
+
+  await sessionRepository.create(session);
+
+  return {
+    token: session.token,
+  };
+}
+```
+
+---
+
+# Why Hash Again?
+
+Notice we never compare:
+
+```text
+123456
+```
+
+against:
+
+```text
+8d969eef...
+```
+
+Instead we do:
+
+```text
+Incoming Password
+        │
+        ▼
+SHA-256
+        │
+        ▼
+8d969eef...
+        │
+        ▼
+Compare hashes
+```
+
+The original password is never stored.
+
+---
+
+# Step 2 — Create Login Controller
+
+## controllers/auth.controller.ts
+
+```ts
+import { IncomingMessage, ServerResponse } from "node:http";
+
+import { getBody } from "../helpers/get-body.js";
+import { sendError } from "../utils/send-error.js";
+import { sendJson } from "../utils/send-json.js";
+
+import { UserService } from "../services/user.service.js";
+
+const userService = new UserService();
+
+/**
+ * Handles user login.
+ */
+export async function loginUser(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  try {
+    const body = await getBody(request);
+
+    const { email, password } = body;
+
+    if (!email || !password) {
+      sendError(response, 400, "email and password are required");
+
+      return;
+    }
+
+    const token = await userService.login(email, password);
+
+    sendJson(response, 200, token);
+  } catch (error) {
+    if (error instanceof Error && error.message === "INVALID_CREDENTIALS") {
+      sendError(response, 401, "Invalid email or password");
+
+      return;
+    }
+
+    if (error instanceof Error) {
+      sendError(response, 400, error.message);
+
+      return;
+    }
+
+    sendError(response, 500, "Internal Server Error");
+  }
+}
+```
+
+---
+
+# Why Create auth.controller.ts?
+
+Notice the application is growing.
+
+Instead of putting everything in `user.controller.ts`, we separate concerns.
+
+```text
+controllers/
+
+user.controller.ts
+
+auth.controller.ts
+```
+
+Authentication endpoints belong together.
+
+Later we'll add:
+
+- logout
+
+to the same controller.
+
+---
+
+# Step 3 — Connect the Router
+
+In `router/router.ts`
+
+Import:
+
+```ts
+import { loginUser } from "../controllers/auth.controller.js";
+```
+
+Replace:
+
+```ts
+case "POST:/login":
+    return notImplemented(request, response);
+```
+
+with
+
+```ts
+case "POST:/login":
+    return loginUser(request, response);
+```
+
+---
+
+# Test
+
+## Successful Login
+
+```http
+POST /login
+```
+
+Body
+
+```json
+{
+  "email": "elysee@example.com",
+  "password": "123456"
+}
+```
+
+Expected
+
+```http
+200 OK
+```
+
+```json
+{
+  "token": "4d7b2bfa-7e66-42e3-a7ec-2ddcd64cb38d"
+}
+```
+
+---
+
+## sessions.json
+
+```json
+[
+  {
+    "token": "4d7b2bfa-7e66-42e3-a7ec-2ddcd64cb38d",
+    "userId": "1db48...",
+    "createdAt": "2026-..."
+  }
+]
+```
+
+---
+
+## Wrong Password
+
+```json
+{
+  "email": "elysee@example.com",
+  "password": "wrong"
+}
+```
+
+Response
+
+```http
+401 Unauthorized
+```
+
+```json
+{
+  "error": "Invalid email or password"
+}
+```
+
+---
+
+## Unknown Email
+
+```json
+{
+  "email": "missing@example.com",
+  "password": "123456"
+}
+```
+
+Response
+
+```http
+401 Unauthorized
+```
+
+Using the same response for both cases prevents attackers from discovering which email addresses are registered.
+
+---
+
+# Authentication Flow
+
+```text
+POST /login
+        │
+        ▼
+Controller
+        │
+        ▼
+UserService.login()
+        │
+        ▼
+UserRepository.findByEmail()
+        │
+        ▼
+Hash password
+        │
+        ▼
+Compare hashes
+        │
+        ▼
+SessionRepository.create()
+        │
+        ▼
+sessions.json
+        │
+        ▼
+Return token
+```
+
+---
+
+# Mental Model
+
+Notice the repositories working together.
+
+```text
+           UserRepository
+                  ▲
+                  │
+                  │
+UserService.login()
+                  │
+                  ▼
+         SessionRepository
+```
+
+The service coordinates multiple repositories.
+
+Repositories never call each other.
+
+Controllers never call repositories directly.
+
+This separation is one of the most common patterns in backend development.
+
+---
+
+# Looking Ahead
+
+You now have:
+
+- ✅ Register
+- ✅ Login
+
+The next logical feature is **Logout**.
+
+That endpoint will introduce your first protected route. It will use the `authenticate()` helper you built earlier to verify the session, remove it from `sessions.json`, and demonstrate how a session token becomes invalid immediately after logout.
+
+</details>
+
+<br/><hr/><br/>

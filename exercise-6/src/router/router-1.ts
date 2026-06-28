@@ -2,11 +2,7 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { parse } from "node:url";
 
 import { sendError } from "../utils/send-error.js";
-import { notImplemented } from "../controllers/placeholder.controller.js";
-
 import { registerUser } from "../controllers/user.controller.js";
-
-import { loginUser } from "../controllers/auth.controller.js";
 
 /**
  * Represents a matched route.
@@ -66,25 +62,25 @@ export async function router(
       return await registerUser(request, response);
 
     case "POST:/login":
-      return await loginUser(request, response);
+      return await registerUser(request, response);
 
     case "POST:/logout":
-      return notImplemented(request, response);
+      return await registerUser(request, response);
 
     case "GET:/users":
-      return notImplemented(request, response);
+      return await registerUser(request, response);
 
     case "GET:/users/:id":
-      return notImplemented(request, response);
+      return await registerUser(request, response);
 
     case "PUT:/users/:id":
-      return notImplemented(request, response);
+      return await registerUser(request, response);
 
     case "DELETE:/users/:id":
-      return notImplemented(request, response);
+      return await registerUser(request, response);
 
     case "GET:/me":
-      return notImplemented(request, response);
+      return await registerUser(request, response);
 
     default:
       sendError(response, 404, "Route not found");
