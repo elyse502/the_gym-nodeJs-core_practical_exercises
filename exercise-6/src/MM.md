@@ -786,3 +786,456 @@ The main differences are that Express includes many additional features, such as
 In the next step, we'll build the manual router that dispatches requests based on `req.method` and `req.url`, including extracting dynamic route parameters like `/users/:id` without using any routing library.
 
 </details>
+
+<br/><hr/><br/>
+
+<details>
+    <summary><b>Third phase</b></summary>
+
+Excellent. Now we build one of the core pieces of every web framework: the router.
+
+After this step, you'll understand what Express Router, Fastify Router, and NestJS Router are doing behind the scenes.
+
+---
+
+# Step 5 — Build a Manual Router
+
+## Goal
+
+Given:
+
+```http
+GET /users
+```
+
+dispatch to:
+
+```ts
+getAllUsers();
+```
+
+Given:
+
+```http
+GET /users/123
+```
+
+dispatch to:
+
+```ts
+getUserById("123");
+```
+
+Given:
+
+```http
+POST /login
+```
+
+dispatch to:
+
+```ts
+loginUser();
+```
+
+No Express.
+
+No router library.
+
+Only:
+
+- `req.method`
+- `req.url`
+- `url.parse()`
+
+---
+
+# How Express Works
+
+When you write:
+
+```ts
+app.get("/users/:id", controller);
+```
+
+Express internally stores something conceptually similar to:
+
+```ts
+[
+  {
+    method: "GET",
+    pattern: "/users/:id",
+    handler: controller,
+  },
+];
+```
+
+Then, for every request:
+
+```text
+Incoming Request
+        ↓
+Read Method
+        ↓
+Read URL
+        ↓
+Compare Routes
+        ↓
+Execute Matching Handler
+```
+
+We'll implement a simplified version of that.
+
+---
+
+# Project Structure
+
+Create:
+
+```text
+src/
+│
+├── router/
+│      router.ts
+│
+├── controllers/
+│      placeholder.controller.ts
+```
+
+We'll use placeholder controllers for now and replace them as we implement each feature.
+
+---
+
+# Step 1 — Create Placeholder Controllers
+
+## controllers/placeholder.controller.ts
+
+```ts
+import { IncomingMessage, ServerResponse } from "node:http";
+
+import { sendJson } from "../utils/send-json.js";
+
+/**
+ * Temporary placeholder used while building
+ * the routing system.
+ */
+export function notImplemented(
+  _request: IncomingMessage,
+  response: ServerResponse,
+): void {
+  sendJson(response, 501, {
+    message: "Handler not implemented yet.",
+  });
+}
+```
+
+Why?
+
+We want the router to be complete before we build the business logic.
+
+This mirrors how large applications are often scaffolded.
+
+---
+
+# Step 2 — Create Route Matching Helpers
+
+## router/router.ts
+
+```ts
+import { IncomingMessage, ServerResponse } from "node:http";
+import { parse } from "node:url";
+
+import { sendError } from "../utils/send-error.js";
+import { notImplemented } from "../controllers/placeholder.controller.js";
+
+/**
+ * Represents a matched route.
+ */
+export interface RouteMatch {
+  pathname: string;
+  id?: string;
+}
+```
+
+---
+
+# Step 3 — Extract Route Parameters
+
+The exercise requires handling:
+
+```text
+/users/:id
+```
+
+We need a helper.
+
+```ts
+/**
+ * Attempts to match routes that contain an ID.
+ *
+ * Example:
+ *
+ * /users/123
+ *
+ * returns:
+ *
+ * {
+ *   pathname: "/users/:id",
+ *   id: "123"
+ * }
+ */
+function matchRoute(pathname: string): RouteMatch {
+  const segments = pathname.split("/").filter(Boolean);
+
+  if (segments.length === 2 && segments[0] === "users") {
+    return {
+      pathname: "/users/:id",
+      id: segments[1],
+    };
+  }
+
+  return {
+    pathname,
+  };
+}
+```
+
+---
+
+# Example
+
+Incoming URL
+
+```text
+/users/9fdc8f72
+```
+
+Split
+
+```ts
+["users", "9fdc8f72"];
+```
+
+Result
+
+```ts
+{
+  pathname: "/users/:id",
+  id: "9fdc8f72",
+}
+```
+
+---
+
+# Step 4 — Build the Router
+
+```ts
+/**
+ * Dispatches incoming requests
+ * to the appropriate controller.
+ */
+export function router(
+  request: IncomingMessage,
+  response: ServerResponse,
+): void {
+  const method = request.method ?? "GET";
+
+  const { pathname = "/" } = parse(request.url ?? "/", true);
+
+  const route = matchRoute(pathname);
+
+  switch (`${method}:${route.pathname}`) {
+    case "POST:/register":
+      return notImplemented(request, response);
+
+    case "POST:/login":
+      return notImplemented(request, response);
+
+    case "POST:/logout":
+      return notImplemented(request, response);
+
+    case "GET:/users":
+      return notImplemented(request, response);
+
+    case "GET:/users/:id":
+      return notImplemented(request, response);
+
+    case "PUT:/users/:id":
+      return notImplemented(request, response);
+
+    case "DELETE:/users/:id":
+      return notImplemented(request, response);
+
+    case "GET:/me":
+      return notImplemented(request, response);
+
+    default:
+      sendError(response, 404, "Route not found");
+  }
+}
+```
+
+---
+
+# Why Use `${method}:${pathname}`?
+
+Instead of nesting switches:
+
+```ts
+switch (method) {
+  case "GET":
+    switch (pathname) {
+      ...
+    }
+}
+```
+
+We flatten the routing key:
+
+```text
+GET:/users
+
+POST:/login
+
+DELETE:/users/123
+```
+
+This keeps the router concise and easy to extend.
+
+---
+
+# Step 5 — Create the HTTP Server
+
+## server.ts
+
+```ts
+import http from "node:http";
+
+import { router } from "./router/router.js";
+
+/**
+ * Entry point of the application.
+ *
+ * Creates the HTTP server and delegates
+ * all requests to the router.
+ */
+const server = http.createServer((request, response) => {
+  router(request, response);
+});
+
+server.listen(3000, () => {
+  console.log("Server running on http://localhost:3000");
+});
+```
+
+---
+
+# Request Flow
+
+```text
+HTTP Request
+      │
+      ▼
+http.createServer()
+      │
+      ▼
+router()
+      │
+      ▼
+Read method
+      │
+      ▼
+Read pathname
+      │
+      ▼
+Extract :id
+      │
+      ▼
+Match route
+      │
+      ▼
+Controller
+      │
+      ▼
+Response
+```
+
+---
+
+# Testing
+
+At this stage, every defined route returns the same placeholder response.
+
+Example:
+
+```http
+GET /users
+```
+
+Response:
+
+```json
+{
+  "message": "Handler not implemented yet."
+}
+```
+
+Unknown route:
+
+```http
+GET /unknown
+```
+
+Response:
+
+```json
+{
+  "error": "Route not found"
+}
+```
+
+Status:
+
+```http
+404 Not Found
+```
+
+---
+
+# Mental Model
+
+Think of the router as a receptionist.
+
+It doesn't perform the work itself.
+
+It simply answers:
+
+> "Which controller should handle this request?"
+
+The controller then performs the business logic.
+
+---
+
+# Commit
+
+```bash
+git add .
+
+git commit -m "feat(exercise-6): implement manual HTTP router
+
+- create centralized request router
+- parse request URLs manually
+- support dynamic user ID routes
+- dispatch requests by method and path
+- add placeholder controllers for incremental development
+- return 404 for unknown routes
+"
+```
+
+---
+
+## Next Step
+
+We'll build the **User Repository**, which abstracts all interactions with `users.json`. This repository will expose methods like `findByEmail`, `findById`, `create`, `update`, `delete`, and `getAll`, keeping file I/O separate from business logic. This separation will also make the upcoming race condition analysis and write-lock implementation much easier to understand.
+
+</details>
