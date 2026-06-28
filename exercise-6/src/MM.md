@@ -1930,3 +1930,422 @@ We'll implement the `authenticate(request)` helper. This will be the first reusa
 </details>
 
 <br/><hr/><br/>
+
+<details>
+  <summary><b>Sixth phase</b></summary>
+
+Excellent. This is one of the most valuable pieces of the whole exercise.
+
+After this step, you'll understand how session-based authentication works before frameworks like Express, Passport, or NextAuth abstract it away.
+
+One thing I want to improve over the exercise instructions is the architecture.
+
+Instead of making `authenticate()` simply return a `User | null`, we'll return an `AuthenticationResult`.
+
+Why?
+
+Because later controllers need both the authenticated user and the session token.
+
+For example:
+
+- `/logout` removes the session by token.
+- `/delete` removes all sessions for a user.
+- `/me` only needs the user.
+
+Returning both avoids parsing the header twice.
+
+---
+
+# Step 8 — Authentication Service
+
+## Authentication Flow
+
+Every protected endpoint follows the same sequence:
+
+```text
+Incoming Request
+        │
+        ▼
+Read x-session-token header
+        │
+        ▼
+Find session
+        │
+        ▼
+Session exists?
+        │
+   No ─────► 401
+        │
+       Yes
+        │
+        ▼
+Find user
+        │
+        ▼
+User exists?
+        │
+   No ─────► Invalid session
+        │
+       Yes
+        │
+        ▼
+Authenticated User
+```
+
+---
+
+# Project Structure
+
+Create:
+
+```text
+src/
+├── services/
+│      authentication.service.ts
+```
+
+---
+
+# Step 1 — Authentication Result Type
+
+Create:
+
+## types/authentication-result.interface.ts
+
+```ts
+import { Session } from "./session.interface.js";
+import { User } from "./user.interface.js";
+
+/**
+ * Represents a successfully authenticated request.
+ */
+export interface AuthenticationResult {
+  user: User;
+  session: Session;
+}
+```
+
+---
+
+# Why Return Both?
+
+Instead of:
+
+```ts
+const user = await authenticate(request);
+```
+
+we'll do:
+
+```ts
+const auth = await authenticate(request);
+
+auth.user;
+
+auth.session;
+```
+
+This becomes useful immediately for logout.
+
+---
+
+# Step 2 — Authentication Service
+
+## services/authentication.service.ts
+
+```ts
+import { IncomingMessage } from "node:http";
+
+import { SessionRepository } from "../repositories/session.repository.js";
+import { UserRepository } from "../repositories/user.repository.js";
+
+import { AuthenticationResult } from "../types/authentication-result.interface.js";
+
+const sessionRepository = new SessionRepository();
+const userRepository = new UserRepository();
+
+/**
+ * Authenticates an incoming request using the
+ * x-session-token header.
+ *
+ * Returns the authenticated user together with the
+ * matching session, or null if authentication fails.
+ */
+export async function authenticate(
+  request: IncomingMessage,
+): Promise<AuthenticationResult | null> {
+  const token = request.headers["x-session-token"];
+
+  if (!token || Array.isArray(token)) {
+    return null;
+  }
+
+  const session = await sessionRepository.findByToken(token);
+
+  if (!session) {
+    return null;
+  }
+
+  const user = await userRepository.findById(session.userId);
+
+  if (!user) {
+    return null;
+  }
+
+  return {
+    user,
+    session,
+  };
+}
+```
+
+---
+
+# Walk Through the Code
+
+## Step 1
+
+Read the header.
+
+```ts
+const token = request.headers["x-session-token"];
+```
+
+Example request:
+
+```http
+GET /me
+
+x-session-token:
+550e8400-e29b-41d4-a716-446655440000
+```
+
+Node stores headers as:
+
+```ts
+request.headers;
+```
+
+---
+
+## Step 2
+
+Validate.
+
+```ts
+if (!token || Array.isArray(token))
+```
+
+Why check `Array.isArray()`?
+
+Node allows duplicate headers:
+
+```http
+x-session-token: abc
+x-session-token: xyz
+```
+
+which becomes:
+
+```ts
+["abc", "xyz"];
+```
+
+Our API only accepts a single token.
+
+---
+
+## Step 3
+
+Find the session.
+
+```ts
+const session = await sessionRepository.findByToken(token);
+```
+
+If not found:
+
+```text
+401 Unauthorized
+```
+
+---
+
+## Step 4
+
+Find the user.
+
+```ts
+const user = await userRepository.findById(session.userId);
+```
+
+Even though the session exists, the user may have been deleted.
+
+Never trust persisted relationships blindly.
+
+---
+
+## Step 5
+
+Return both.
+
+```ts
+return {
+  user,
+  session,
+};
+```
+
+---
+
+# Example
+
+Suppose:
+
+users.json
+
+```json
+[
+  {
+    "id": "u1",
+    "name": "Alice",
+    "email": "alice@example.com",
+    "password": "...",
+    "createdAt": "..."
+  }
+]
+```
+
+sessions.json
+
+```json
+[
+  {
+    "token": "abc123",
+    "userId": "u1",
+    "createdAt": "..."
+  }
+]
+```
+
+Request:
+
+```http
+GET /me
+
+x-session-token: abc123
+```
+
+authenticate() returns:
+
+```ts
+{
+  user: {
+    id: "u1",
+    name: "Alice",
+    email: "alice@example.com",
+    password: "...",
+    createdAt: "...",
+  },
+
+  session: {
+    token: "abc123",
+    userId: "u1",
+    createdAt: "...",
+  },
+}
+```
+
+---
+
+# Mental Model
+
+```text
+HTTP Request
+      │
+      ▼
+Read Header
+      │
+      ▼
+Session Repository
+      │
+      ▼
+Session
+      │
+      ▼
+User Repository
+      │
+      ▼
+User
+      │
+      ▼
+Authentication Result
+```
+
+---
+
+# Why Is This a Service?
+
+Notice:
+
+Repositories answer questions about storage.
+
+Examples:
+
+```ts
+findById();
+
+findByToken();
+
+findAll();
+```
+
+Authentication is business logic.
+
+It combines two repositories and applies application rules.
+
+That's why it belongs in a service.
+
+---
+
+# Looking Ahead
+
+Every protected controller now becomes simple.
+
+Example:
+
+```ts
+const auth = await authenticate(request);
+
+if (!auth) {
+  sendError(response, 401, "Unauthorized");
+  return;
+}
+
+// Protected logic here.
+```
+
+Instead of rewriting authentication logic in every route, we centralize it in one place.
+
+---
+
+## Next Step
+
+We'll implement the first real controller, `POST /register`.
+
+This step will tie together everything you've built so far:
+
+- Manual body parsing with `getBody()`
+- Manual routing
+- `UserRepository`
+- SHA-256 password hashing
+- UUID generation
+- ISO timestamp creation
+- Writing to `users.json`
+- Returning a sanitized user object without the password
+
+It will be the first end-to-end feature in the application.
+
+</details>
+
+<br/><hr/><br/>
