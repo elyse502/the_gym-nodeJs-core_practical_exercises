@@ -44,6 +44,7 @@ coverage/
 
 # Ignore user data file
 users.json
+sessions.json
 
 # Ignore certificate files
 certs/
