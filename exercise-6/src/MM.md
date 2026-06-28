@@ -2349,3 +2349,412 @@ It will be the first end-to-end feature in the application.
 </details>
 
 <br/><hr/><br/>
+
+<details>
+  <summary><b>Seventh phase</b></summary>
+
+Excellent. This is the first complete feature of the application.
+
+Up to this point, you've built the infrastructure:
+
+- HTTP server
+- Router
+- Body parser
+- JSON utilities
+- Repositories
+- Authentication service
+
+Now we're finally implementing a real business use case.
+
+This is also a good opportunity to introduce another architectural improvement.
+
+Instead of putting all business logic inside controllers, we'll separate responsibilities further.
+
+```text
+HTTP Request
+      │
+      ▼
+Controller
+      │
+      ▼
+User Service
+      │
+      ▼
+Repository
+      │
+      ▼
+users.json
+```
+
+Why?
+
+The controller should only:
+
+- read the request
+- call the service
+- send the response
+
+The service should:
+
+- validate business rules
+- hash passwords
+- generate IDs
+- create users
+
+This is how most production applications are structured.
+
+---
+
+# Step 9 — Implement User Registration
+
+## Project Structure
+
+Create:
+
+```text
+src/
+├── controllers/
+│      user.controller.ts
+│
+├── services/
+│      user.service.ts
+```
+
+---
+
+# Step 1 — User Service
+
+## services/user.service.ts
+
+```ts
+import crypto from "node:crypto";
+
+import { UserRepository } from "../repositories/user.repository.js";
+
+import { User } from "../types/user.interface.js";
+
+const userRepository = new UserRepository();
+
+/**
+ * Handles business logic related to users.
+ */
+export class UserService {
+  /**
+   * Registers a new user.
+   *
+   * @throws Error if the email already exists.
+   */
+  async register(
+    name: string,
+    email: string,
+    password: string,
+  ): Promise<Omit<User, "password">> {
+    const existingUser = await userRepository.findByEmail(email);
+
+    if (existingUser) {
+      throw new Error("EMAIL_ALREADY_EXISTS");
+    }
+
+    const hashedPassword = crypto
+      .createHash("sha256")
+      .update(password)
+      .digest("hex");
+
+    const user: User = {
+      id: crypto.randomUUID(),
+      name,
+      email,
+      password: hashedPassword,
+      createdAt: new Date().toISOString(),
+    };
+
+    await userRepository.create(user);
+
+    const { password: _, ...safeUser } = user;
+
+    return safeUser;
+  }
+}
+```
+
+---
+
+# Why Hash the Password?
+
+Never store:
+
+```text
+password: "secret123"
+```
+
+Instead store:
+
+```text
+password:
+5e884898da280471...
+```
+
+Even if someone steals `users.json`, they won't immediately know users' passwords.
+
+Later in the reflection questions, you'll examine why SHA-256 is still insufficient for production.
+
+---
+
+# Step 2 — User Controller
+
+## controllers/user.controller.ts
+
+```ts
+import { IncomingMessage, ServerResponse } from "node:http";
+
+import { getBody } from "../helpers/get-body.js";
+import { sendError } from "../utils/send-error.js";
+import { sendJson } from "../utils/send-json.js";
+
+import { UserService } from "../services/user.service.js";
+
+const userService = new UserService();
+
+/**
+ * Handles user registration.
+ */
+export async function registerUser(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  try {
+    const body = await getBody(request);
+
+    const { name, email, password } = body;
+
+    if (!name || !email || !password) {
+      sendError(response, 400, "name, email and password are required");
+
+      return;
+    }
+
+    const user = await userService.register(name, email, password);
+
+    sendJson(response, 201, user);
+  } catch (error) {
+    if (error instanceof Error && error.message === "EMAIL_ALREADY_EXISTS") {
+      sendError(response, 409, "Email already exists");
+
+      return;
+    }
+
+    if (error instanceof Error) {
+      sendError(response, 400, error.message);
+
+      return;
+    }
+
+    sendError(response, 500, "Internal Server Error");
+  }
+}
+```
+
+---
+
+# Why Doesn't the Controller Hash Passwords?
+
+Because password hashing is not related to HTTP.
+
+Imagine tomorrow you build:
+
+- REST API
+- CLI application
+- GraphQL API
+- Background worker
+
+All of them should reuse the same registration logic.
+
+That's exactly what the service layer provides.
+
+---
+
+# Step 3 — Connect the Router
+
+Replace the placeholder import.
+
+```ts
+import { registerUser } from "../controllers/user.controller.js";
+```
+
+Replace:
+
+```ts
+return notImplemented(request, response);
+```
+
+with:
+
+```ts
+return registerUser(request, response);
+```
+
+for:
+
+```text
+POST /register
+```
+
+---
+
+# Test in Postman
+
+## First Request
+
+```http
+POST /register
+```
+
+Body
+
+```json
+{
+  "name": "Elysee",
+  "email": "elysee@example.com",
+  "password": "123456"
+}
+```
+
+Expected
+
+Status:
+
+```text
+201 Created
+```
+
+Response
+
+```json
+{
+  "id": "...",
+  "name": "Elysee",
+  "email": "elysee@example.com",
+  "createdAt": "2026-..."
+}
+```
+
+Notice:
+
+No password is returned.
+
+---
+
+## users.json
+
+```json
+[
+  {
+    "id": "...",
+    "name": "Elysee",
+    "email": "elysee@example.com",
+    "password": "8d969eef6ecad3c29...",
+    "createdAt": "2026-..."
+  }
+]
+```
+
+---
+
+## Duplicate Registration
+
+Send exactly the same request.
+
+Expected
+
+```text
+409 Conflict
+```
+
+```json
+{
+  "error": "Email already exists"
+}
+```
+
+---
+
+# Request Flow
+
+```text
+POST /register
+        │
+        ▼
+Router
+        │
+        ▼
+registerUser()
+        │
+        ▼
+getBody()
+        │
+        ▼
+UserService.register()
+        │
+        ▼
+UserRepository.findByEmail()
+        │
+        ▼
+Hash Password
+        │
+        ▼
+Generate UUID
+        │
+        ▼
+Write users.json
+        │
+        ▼
+Return Safe User
+```
+
+---
+
+# Mental Model
+
+Notice the separation of concerns:
+
+**Controller**
+
+- Parse HTTP request
+- Validate required fields
+- Send HTTP response
+
+**Service**
+
+- Check duplicate email
+- Hash password
+- Generate UUID
+- Create user
+- Remove password before returning
+
+**Repository**
+
+- Read JSON
+- Write JSON
+
+Each layer has exactly one responsibility.
+
+---
+
+# Looking Ahead
+
+Registration is complete, but users still can't authenticate.
+
+The next feature is `POST /login`, where you'll:
+
+- Read credentials from the request body.
+- Hash the provided password.
+- Compare it with the stored hash.
+- Generate a session token.
+- Save the session in `sessions.json`.
+- Return the token to the client.
+
+That token will then unlock every protected route in the rest of the exercise.
+
+</details>
+
+<br/><hr/><br/>

@@ -2,7 +2,7 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { parse } from "node:url";
 
 import { sendError } from "../utils/send-error.js";
-import { registerUser } from "../controllers/user.controller.js";
+import { notImplemented } from "../controllers/placeholder.controller.js";
 
 /**
  * Represents a matched route.
@@ -46,10 +46,10 @@ function matchRoute(pathname: string): RouteMatch {
  * Dispatches incoming requests
  * to the appropriate controller.
  */
-export async function router(
+export function router(
   request: IncomingMessage,
   response: ServerResponse,
-): Promise<void> {
+): void {
   const method = request.method ?? "GET";
 
   const parsed = parse(request.url ?? "/", true);
@@ -59,28 +59,28 @@ export async function router(
 
   switch (`${method}:${route.pathname}`) {
     case "POST:/register":
-      return await registerUser(request, response);
+      return notImplemented(request, response);
 
     case "POST:/login":
-      return await registerUser(request, response);
+      return notImplemented(request, response);
 
     case "POST:/logout":
-      return await registerUser(request, response);
+      return notImplemented(request, response);
 
     case "GET:/users":
-      return await registerUser(request, response);
+      return notImplemented(request, response);
 
     case "GET:/users/:id":
-      return await registerUser(request, response);
+      return notImplemented(request, response);
 
     case "PUT:/users/:id":
-      return await registerUser(request, response);
+      return notImplemented(request, response);
 
     case "DELETE:/users/:id":
-      return await registerUser(request, response);
+      return notImplemented(request, response);
 
     case "GET:/me":
-      return await registerUser(request, response);
+      return notImplemented(request, response);
 
     default:
       sendError(response, 404, "Route not found");
