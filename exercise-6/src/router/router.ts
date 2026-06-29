@@ -4,7 +4,11 @@ import { parse } from "node:url";
 import { sendError } from "../utils/send-error.js";
 import { notImplemented } from "../controllers/placeholder.controller.js";
 
-import { getAllUsers, registerUser } from "../controllers/user.controller.js";
+import {
+  getAllUsers,
+  getUserById,
+  registerUser,
+} from "../controllers/user.controller.js";
 
 import { loginUser, logoutUser } from "../controllers/auth.controller.js";
 
@@ -13,7 +17,9 @@ import { loginUser, logoutUser } from "../controllers/auth.controller.js";
  */
 export interface RouteMatch {
   pathname: string;
-  id?: string;
+  params: {
+    id?: string | undefined;
+  };
 }
 
 /**
@@ -34,15 +40,17 @@ function matchRoute(pathname: string): RouteMatch {
   const segments = pathname.split("/").filter(Boolean);
 
   if (segments.length === 2 && segments[0] === "users") {
-    const id = segments[1];
     return {
       pathname: "/users/:id",
-      ...(id ? { id } : {}),
+      params: {
+        id: segments[1],
+      },
     };
   }
 
   return {
     pathname,
+    params: {},
   };
 }
 
@@ -75,7 +83,7 @@ export async function router(
       return await getAllUsers(request, response);
 
     case "GET:/users/:id":
-      return notImplemented(request, response);
+      return await getUserById(request, response, route.params.id!);
 
     case "PUT:/users/:id":
       return notImplemented(request, response);

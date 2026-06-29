@@ -4094,3 +4094,444 @@ We'll implement `GET /users/:id`. This will introduce manual route parameter han
 </details>
 
 <br/><hr/><br/>
+
+<details>
+  <summary><b>Eleventh phase</b></summary>
+
+Excellent. This endpoint completes the "read" portion of the CRUD operations.
+
+Although it looks similar to `GET /users`, it introduces another important concept used by every web framework:
+
+- Route parameters (`:id`)
+- Looking up a single resource
+- Returning `404 Not Found`
+- Reusing the same service layer
+
+This is exactly what Express does internally when you write:
+
+```ts
+app.get("/users/:id", ...)
+```
+
+Our router already extracts the `id`. Now we'll use it.
+
+---
+
+# Step 13 — Implement GET /users/:id
+
+## Goal
+
+Implement:
+
+```http
+GET /users/:id
+```
+
+Requirements:
+
+- Protected endpoint.
+- Return one user.
+- Never return the password.
+- Return `404` if the user doesn't exist.
+
+---
+
+# Request Flow
+
+```text
+Incoming Request
+        │
+        ▼
+authenticate()
+        │
+        ▼
+Router extracts :id
+        │
+        ▼
+UserService.getById()
+        │
+        ▼
+UserRepository.findById()
+        │
+        ▼
+Remove password
+        │
+        ▼
+Return user
+```
+
+---
+
+# Step 1 — Extend User Service
+
+Open:
+
+```text
+services/user.service.ts
+```
+
+Import the mapper if you extracted it in the previous step.
+
+```ts
+import { toSafeUser } from "../utils/user-mapper.js";
+```
+
+Add the following method.
+
+```ts
+/**
+ * Returns a single user by ID.
+ *
+ * @throws Error if the user does not exist.
+ */
+async getById(
+  id: string,
+): Promise<Omit<User, "password">> {
+  const user =
+    await userRepository.findById(id);
+
+  if (!user) {
+    throw new Error("USER_NOT_FOUND");
+  }
+
+  return toSafeUser(user);
+}
+```
+
+Notice something important.
+
+The repository returns:
+
+```ts
+User | undefined;
+```
+
+The service decides whether that becomes:
+
+```text
+404 Not Found
+```
+
+Repositories don't know anything about HTTP.
+
+---
+
+# Step 2 — Update the Router
+
+Earlier we built:
+
+```ts
+const route = matchRoute(pathname);
+```
+
+Let's improve it slightly so controllers receive route parameters without recomputing them.
+
+Update the interface.
+
+```ts
+export interface RouteMatch {
+  pathname: string;
+  params: {
+    id?: string;
+  };
+}
+```
+
+Update `matchRoute()`.
+
+```ts
+function matchRoute(pathname: string): RouteMatch {
+  const segments = pathname.split("/").filter(Boolean);
+
+  if (segments.length === 2 && segments[0] === "users") {
+    return {
+      pathname: "/users/:id",
+      params: {
+        id: segments[1],
+      },
+    };
+  }
+
+  return {
+    pathname,
+    params: {},
+  };
+}
+```
+
+This avoids parsing the URL again later.
+
+---
+
+# Step 3 — Pass Route Parameters
+
+Update the router function.
+
+Instead of:
+
+```ts
+return getUserById(request, response);
+```
+
+pass the ID.
+
+```ts
+return getUserById(request, response, route.params.id!);
+```
+
+Notice the router is responsible for extracting parameters.
+
+Controllers shouldn't parse URLs.
+
+---
+
+# Step 4 — Implement Controller
+
+Open:
+
+```text
+controllers/user.controller.ts
+```
+
+Add:
+
+```ts
+/**
+ * Returns a single user.
+ */
+export async function getUserById(
+  request: IncomingMessage,
+  response: ServerResponse,
+  id: string,
+): Promise<void> {
+  const auth = await authenticate(request);
+
+  if (!auth) {
+    sendError(response, 401, "Unauthorized");
+
+    return;
+  }
+
+  try {
+    const user = await userService.getById(id);
+
+    sendJson(response, 200, user);
+  } catch (error) {
+    if (error instanceof Error && error.message === "USER_NOT_FOUND") {
+      sendError(response, 404, "User not found");
+
+      return;
+    }
+
+    sendError(response, 500, "Internal Server Error");
+  }
+}
+```
+
+---
+
+# Step 5 — Connect the Router
+
+Replace:
+
+```ts
+case "GET:/users/:id":
+    return notImplemented(request, response);
+```
+
+with:
+
+```ts
+case "GET:/users/:id":
+    return getUserById(
+        request,
+        response,
+        route.params.id!,
+    );
+```
+
+---
+
+# Test 1
+
+Login.
+
+Copy the token.
+
+Request
+
+```http
+GET /users/<existing-id>
+```
+
+Headers
+
+```http
+x-session-token: <token>
+```
+
+Expected
+
+```http
+200 OK
+```
+
+```json
+{
+  "id": "...",
+  "name": "Alice",
+  "email": "alice@example.com",
+  "createdAt": "..."
+}
+```
+
+---
+
+# Test 2
+
+Unknown ID.
+
+```http
+GET /users/not-found
+```
+
+Expected
+
+```http
+404 Not Found
+```
+
+```json
+{
+  "error": "User not found"
+}
+```
+
+---
+
+# Test 3
+
+Without authentication.
+
+```http
+GET /users/<id>
+```
+
+No token.
+
+Expected
+
+```http
+401 Unauthorized
+```
+
+---
+
+# Request Flow
+
+```text
+GET /users/123
+        │
+        ▼
+Router
+        │
+        ▼
+Extract :id
+        │
+        ▼
+authenticate()
+        │
+        ▼
+UserService.getById()
+        │
+        ▼
+UserRepository.findById()
+        │
+        ▼
+Remove password
+        │
+        ▼
+Response
+```
+
+---
+
+# Why Doesn't the Controller Call `findById()`?
+
+Because controllers shouldn't know where data comes from.
+
+Tomorrow you might replace:
+
+```text
+users.json
+```
+
+with:
+
+```text
+PostgreSQL
+```
+
+The controller shouldn't change.
+
+Only the repository changes.
+
+That's one of the biggest benefits of the Repository pattern.
+
+---
+
+# Small Refactoring (Recommended)
+
+At this point, you probably notice this repeated in every protected controller:
+
+```ts
+const auth = await authenticate(request);
+
+if (!auth) {
+  sendError(response, 401, "Unauthorized");
+
+  return;
+}
+```
+
+We're repeating ourselves.
+
+A clean refactoring is to create a helper:
+
+```ts
+export async function requireAuth(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<AuthenticationResult | null> {
+  const auth = await authenticate(request);
+
+  if (!auth) {
+    sendError(response, 401, "Unauthorized");
+    return null;
+  }
+
+  return auth;
+}
+```
+
+Controllers become:
+
+```ts
+const auth = await requireAuth(request, response);
+
+if (!auth) {
+  return;
+}
+```
+
+This removes duplicated authentication boilerplate and makes protected controllers easier to read.
+
+---
+
+## Next Step
+
+We'll implement `PUT /users/:id`, which is the most interesting endpoint so far. It introduces authorization in addition to authentication. You'll learn the difference between "Who are you?" (authentication) and "Are you allowed to do this?" (authorization), enforce ownership checks with `403 Forbidden`, update only the user's `name`, and persist the changes back to `users.json` while keeping the service and repository layers clean.
+
+</details>
+
+<br/><hr/><br/>

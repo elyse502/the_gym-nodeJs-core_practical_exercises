@@ -80,3 +80,34 @@ export async function getAllUsers(
 
   sendJson(response, 200, users);
 }
+
+/**
+ * Returns a single user.
+ */
+export async function getUserById(
+  request: IncomingMessage,
+  response: ServerResponse,
+  id: string,
+): Promise<void> {
+  const auth = await authenticate(request);
+
+  if (!auth) {
+    sendError(response, 401, "Unauthorized");
+
+    return;
+  }
+
+  try {
+    const user = await userService.getById(id);
+
+    sendJson(response, 200, user);
+  } catch (error) {
+    if (error instanceof Error && error.message === "USER_NOT_FOUND") {
+      sendError(response, 404, "User not found");
+
+      return;
+    }
+
+    sendError(response, 500, "Internal Server Error");
+  }
+}

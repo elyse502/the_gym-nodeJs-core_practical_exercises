@@ -106,4 +106,19 @@ export class UserService {
 
     return filteredUsers.map((user) => toSafeUser(user));
   }
+
+  /**
+   * Returns a single user by ID.
+   *
+   * @throws Error if the user does not exist.
+   */
+  async getById(id: string): Promise<Omit<User, "password">> {
+    const user = await userRepository.findById(id);
+
+    if (!user) {
+      throw new Error("USER_NOT_FOUND");
+    }
+
+    return toSafeUser(user);
+  }
 }
