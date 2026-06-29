@@ -5,6 +5,7 @@ import { sendError } from "../utils/send-error.js";
 import { notImplemented } from "../controllers/placeholder.controller.js";
 
 import {
+  deleteUser,
   getAllUsers,
   getUserById,
   registerUser,
@@ -90,7 +91,7 @@ export async function router(
       return await updateUser(request, response, route.params.id!);
 
     case "DELETE:/users/:id":
-      return notImplemented(request, response);
+      return await deleteUser(request, response, route.params.id!);
 
     case "GET:/me":
       return notImplemented(request, response);

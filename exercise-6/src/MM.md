@@ -4569,15 +4569,15 @@ PUT /users/:id
 
 Requirements:
 
-* Protected endpoint.
-* Only the authenticated user can update their own record.
-* Only the `name` field is editable.
-* Return:
+- Protected endpoint.
+- Only the authenticated user can update their own record.
+- Only the `name` field is editable.
+- Return:
+  - `401` if not authenticated.
+  - `403` if authenticated but trying to update another user.
+  - `404` if the user doesn't exist.
 
-  * `401` if not authenticated.
-  * `403` if authenticated but trying to update another user.
-  * `404` if the user doesn't exist.
-* Persist changes to `users.json`.
+- Persist changes to `users.json`.
 
 ---
 
@@ -4656,9 +4656,9 @@ async update(
 
 Notice the repository doesn't know:
 
-* HTTP
-* Authentication
-* Authorization
+- HTTP
+- Authentication
+- Authorization
 
 It only knows how to persist users.
 
@@ -4707,7 +4707,7 @@ Notice something important.
 The service never checks:
 
 ```ts
-auth.user.id
+auth.user.id;
 ```
 
 Authorization belongs to the controller because it depends on the authenticated HTTP request.
@@ -4735,86 +4735,46 @@ export async function updateUser(
   response: ServerResponse,
   id: string,
 ): Promise<void> {
-  const auth =
-    await requireAuth(
-      request,
-      response,
-    );
+  const auth = await requireAuth(request, response);
 
   if (!auth) {
     return;
   }
 
   if (auth.user.id !== id) {
-    sendError(
-      response,
-      403,
-      "Forbidden",
-    );
+    sendError(response, 403, "Forbidden");
 
     return;
   }
 
   try {
-    const body =
-      await getBody(request);
+    const body = await getBody(request);
 
     const { name } = body;
 
-    if (
-      typeof name !== "string" ||
-      name.trim() === ""
-    ) {
-      sendError(
-        response,
-        400,
-        "name is required",
-      );
+    if (typeof name !== "string" || name.trim() === "") {
+      sendError(response, 400, "name is required");
 
       return;
     }
 
-    const user =
-      await userService.updateName(
-        id,
-        name.trim(),
-      );
+    const user = await userService.updateName(id, name.trim());
 
-    sendJson(
-      response,
-      200,
-      user,
-    );
+    sendJson(response, 200, user);
   } catch (error) {
-    if (
-      error instanceof Error &&
-      error.message ===
-        "USER_NOT_FOUND"
-    ) {
-      sendError(
-        response,
-        404,
-        "User not found",
-      );
+    if (error instanceof Error && error.message === "USER_NOT_FOUND") {
+      sendError(response, 404, "User not found");
 
       return;
     }
 
     if (error instanceof Error) {
-      sendError(
-        response,
-        400,
-        error.message,
-      );
+      sendError(response, 400, error.message);
 
       return;
     }
 
-    sendError(
-      response,
-      500,
-      "Internal Server Error",
-    );
+    sendError(response, 500, "Internal Server Error");
   }
 }
 ```
@@ -4877,10 +4837,10 @@ Update imports.
 
 ```ts
 import {
-    registerUser,
-    getAllUsers,
-    getUserById,
-    updateUser,
+  registerUser,
+  getAllUsers,
+  getUserById,
+  updateUser,
 } from "../controllers/user.controller.js";
 ```
 
@@ -5022,18 +4982,18 @@ Extracts:
 
 Controller
 
-* Authenticates.
-* Authorizes.
-* Reads request body.
-* Sends response.
+- Authenticates.
+- Authorizes.
+- Reads request body.
+- Sends response.
 
 Service
 
-* Updates business object.
+- Updates business object.
 
 Repository
 
-* Writes to disk.
+- Writes to disk.
 
 Each layer has exactly one responsibility.
 
@@ -5077,11 +5037,472 @@ The final CRUD endpoint is `DELETE /users/:id`.
 
 Unlike update, deleting a user has an extra responsibility:
 
-* Remove the user.
-* Remove every active session belonging to that user.
+- Remove the user.
+- Remove every active session belonging to that user.
 
 This introduces coordination between two repositories (`UserRepository` and `SessionRepository`) inside the service layer, a common pattern in real backend applications.
 
+</details>
+
+<br/><hr/><br/>
+
+<details>
+  <summary><b>Thirteenth phase</b></summary>
+
+Excellent. This is the final CRUD endpoint and the first operation that affects multiple data stores.
+
+Up to now, every service has interacted with a single repository. Deleting a user is different because removing the user alone would leave orphaned sessions behind.
+
+This is a good example of why the service layer exists. It coordinates business operations across multiple repositories while keeping each repository focused on its own persistence logic.
+
+---
+
+# Step 15 — Implement DELETE /users/:id
+
+## Goal
+
+Implement:
+
+```http
+DELETE /users/:id
+```
+
+Requirements:
+
+- Protected endpoint.
+- A user can only delete their own account.
+- Delete the user from `users.json`.
+- Delete every session belonging to that user from `sessions.json`.
+- Return a success message.
+- Return:
+  - `401` if unauthenticated.
+  - `403` if trying to delete another user.
+  - `404` if the user doesn't exist.
+
+---
+
+# Request Flow
+
+```text
+Incoming Request
+        │
+        ▼
+requireAuth()
+        │
+        ▼
+Ownership Check
+        │
+        ▼
+UserService.deleteUser()
+        │
+        ├───────────────┐
+        ▼               ▼
+UserRepository    SessionRepository
+delete()          deleteByUserId()
+        │               │
+        └───────┬───────┘
+                ▼
+        Return Success
+```
+
+Notice that the service coordinates two repositories.
+
+---
+
+# Step 1 — Extend Session Repository
+
+Open:
+
+```text
+repositories/session.repository.ts
+```
+
+Add a method to remove every session for a user.
+
+```ts
+/**
+ * Deletes all sessions belonging
+ * to the specified user.
+ */
+async deleteByUserId(
+  userId: string,
+): Promise<void> {
+  const sessions = await this.findAll();
+
+  const remainingSessions = sessions.filter(
+    (session) => session.userId !== userId,
+  );
+
+  await this.saveAll(remainingSessions);
+}
+```
+
+This ensures all active sessions are invalidated after account deletion.
+
+---
+
+# Step 2 — Extend User Repository
+
+Open:
+
+```text
+repositories/user.repository.ts
+```
+
+Add:
+
+```ts
+/**
+ * Deletes a user by ID.
+ */
+async delete(
+  id: string,
+): Promise<void> {
+  const users = await this.findAll();
+
+  const remainingUsers = users.filter(
+    (user) => user.id !== id,
+  );
+
+  await this.saveAll(remainingUsers);
+}
+```
+
+Again, the repository simply persists data. It doesn't know why the deletion is happening.
+
+---
+
+# Step 3 — Extend User Service
+
+Open:
+
+```text
+services/user.service.ts
+```
+
+Make sure you already have:
+
+```ts
+const sessionRepository = new SessionRepository();
+```
+
+Now add:
+
+```ts
+/**
+ * Deletes a user and all of
+ * their active sessions.
+ *
+ * @throws Error if the user
+ * does not exist.
+ */
+async deleteUser(
+  id: string,
+): Promise<void> {
+  const user = await userRepository.findById(id);
+
+  if (!user) {
+    throw new Error("USER_NOT_FOUND");
+  }
+
+  await userRepository.delete(id);
+
+  await sessionRepository.deleteByUserId(id);
+}
+```
+
+Notice the order:
+
+```text
+Find User
+     │
+     ▼
+Delete User
+     │
+     ▼
+Delete Sessions
+```
+
+If the user doesn't exist, nothing is deleted.
+
+---
+
+# Step 4 — Implement Controller
+
+Open:
+
+```text
+controllers/user.controller.ts
+```
+
+Add:
+
+```ts
+/**
+ * Deletes the authenticated user's account.
+ */
+export async function deleteUser(
+  request: IncomingMessage,
+  response: ServerResponse,
+  id: string,
+): Promise<void> {
+  const auth = await requireAuth(request, response);
+
+  if (!auth) {
+    return;
+  }
+
+  if (auth.user.id !== id) {
+    sendError(response, 403, "Forbidden");
+
+    return;
+  }
+
+  try {
+    await userService.deleteUser(id);
+
+    sendJson(response, 200, {
+      message: "User deleted successfully",
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "USER_NOT_FOUND") {
+      sendError(response, 404, "User not found");
+
+      return;
+    }
+
+    sendError(response, 500, "Internal Server Error");
+  }
+}
+```
+
+Notice how little business logic exists in the controller.
+
+---
+
+# Step 5 — Connect the Router
+
+Replace:
+
+```ts
+case "DELETE:/users/:id":
+    return notImplemented(request, response);
+```
+
+with:
+
+```ts
+case "DELETE:/users/:id":
+    return deleteUser(
+        request,
+        response,
+        route.params.id!,
+    );
+```
+
+Update imports if needed.
+
+```ts
+import {
+  registerUser,
+  getAllUsers,
+  getUserById,
+  updateUser,
+  deleteUser,
+} from "../controllers/user.controller.js";
+```
+
+---
+
+# Test 1
+
+Login as Alice.
+
+Suppose Alice's ID is:
+
+```text
+123
+```
+
+Request:
+
+```http
+DELETE /users/123
+```
+
+Headers:
+
+```http
+x-session-token: <alice-token>
+```
+
+Expected:
+
+```http
+200 OK
+```
+
+```json
+{
+  "message": "User deleted successfully"
+}
+```
+
+---
+
+# Verify Storage
+
+`users.json`
+
+Before:
+
+```json
+[
+  {
+    "id": "123",
+    "name": "Alice"
+  }
+]
+```
+
+After:
+
+```json
+[]
+```
+
+---
+
+`sessions.json`
+
+Before:
+
+```json
+[
+  {
+    "token": "abc123",
+    "userId": "123"
+  }
+]
+```
+
+After:
+
+```json
+[]
+```
+
+Every session belonging to Alice has been removed.
+
+---
+
+# Test 2
+
+Reuse the same token.
+
+```http
+GET /me
+```
+
+Expected:
+
+```http
+401 Unauthorized
+```
+
+The session no longer exists.
+
+---
+
+# Test 3
+
+Try deleting another user.
+
+```http
+DELETE /users/bob-id
+```
+
+Expected:
+
+```http
+403 Forbidden
+```
+
+Authentication succeeded.
+
+Authorization failed.
+
+---
+
+# Request Lifecycle
+
+```text
+DELETE /users/:id
+          │
+          ▼
+requireAuth()
+          │
+          ▼
+Ownership Check
+          │
+          ▼
+UserService.deleteUser()
+          │
+      ┌───┴────────────┐
+      ▼                ▼
+Delete User      Delete Sessions
+      │                │
+      └──────┬─────────┘
+             ▼
+      Success Response
+```
+
+---
+
+# Why Does the Service Coordinate Both Repositories?
+
+Imagine putting this logic inside the controller.
+
+The controller would have to know:
+
+- how users are stored
+- how sessions are stored
+- which order to delete them
+
+That mixes HTTP handling with business rules.
+
+Instead:
+
+```text
+Controller
+```
+
+Coordinates the HTTP request.
+
+```text
+Service
+```
+
+Coordinates business operations.
+
+```text
+Repositories
+```
+
+Coordinate persistence.
+
+This separation becomes even more valuable as applications grow.
+
+---
+
+# Looking Ahead
+
+Only two endpoints remain:
+
+- `GET /me`
+- Stress test and race condition analysis
+
+`GET /me` is intentionally tiny. It demonstrates the value of the authentication service you've already built. The controller will be only a few lines because all the heavy lifting has already been done.
 
 </details>
 

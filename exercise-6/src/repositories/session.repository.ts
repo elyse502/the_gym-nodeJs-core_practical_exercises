@@ -57,8 +57,8 @@ export class SessionRepository {
   }
 
   /**
-   * Removes every session
-   * belonging to a user.
+   * Deletes all sessions belonging
+   * to the specified user.
    */
   async deleteByUserId(userId: string): Promise<void> {
     const sessions = await this.findAll();

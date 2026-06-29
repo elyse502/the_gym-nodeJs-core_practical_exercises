@@ -66,7 +66,7 @@ export class UserRepository {
   }
 
   /**
-   * Deletes a user.
+   * Deletes a user by ID.
    */
   async delete(id: string): Promise<void> {
     const users = await this.findAll();

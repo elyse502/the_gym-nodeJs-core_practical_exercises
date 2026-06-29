@@ -158,3 +158,40 @@ export async function updateUser(
     sendError(response, 500, "Internal Server Error");
   }
 }
+
+/**
+ * Deletes the authenticated user's account.
+ */
+export async function deleteUser(
+  request: IncomingMessage,
+  response: ServerResponse,
+  id: string,
+): Promise<void> {
+  const auth = await requireAuth(request, response);
+
+  if (!auth) {
+    return;
+  }
+
+  if (auth.user.id !== id) {
+    sendError(response, 403, "Forbidden");
+
+    return;
+  }
+
+  try {
+    await userService.deleteUser(id);
+
+    sendJson(response, 200, {
+      message: "User deleted successfully",
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "USER_NOT_FOUND") {
+      sendError(response, 404, "User not found");
+
+      return;
+    }
+
+    sendError(response, 500, "Internal Server Error");
+  }
+}

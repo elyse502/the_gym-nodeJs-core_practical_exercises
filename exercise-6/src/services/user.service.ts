@@ -143,4 +143,23 @@ export class UserService {
 
     return toSafeUser(updatedUser);
   }
+
+  /**
+   * Deletes a user and all of
+   * their active sessions.
+   *
+   * @throws Error if the user
+   * does not exist.
+   */
+  async deleteUser(id: string): Promise<void> {
+    const user = await userRepository.findById(id);
+
+    if (!user) {
+      throw new Error("USER_NOT_FOUND");
+    }
+
+    await userRepository.delete(id);
+
+    await sessionRepository.deleteByUserId(id);
+  }
 }
