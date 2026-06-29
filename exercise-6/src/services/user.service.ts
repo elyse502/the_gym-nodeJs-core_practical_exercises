@@ -121,4 +121,26 @@ export class UserService {
 
     return toSafeUser(user);
   }
+
+  /**
+   * Updates the user's name.
+   *
+   * @throws Error if user does not exist.
+   */
+  async updateName(id: string, name: string): Promise<Omit<User, "password">> {
+    const user = await userRepository.findById(id);
+
+    if (!user) {
+      throw new Error("USER_NOT_FOUND");
+    }
+
+    const updatedUser: User = {
+      ...user,
+      name,
+    };
+
+    await userRepository.update(updatedUser);
+
+    return toSafeUser(updatedUser);
+  }
 }

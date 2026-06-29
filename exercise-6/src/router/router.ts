@@ -8,6 +8,7 @@ import {
   getAllUsers,
   getUserById,
   registerUser,
+  updateUser,
 } from "../controllers/user.controller.js";
 
 import { loginUser, logoutUser } from "../controllers/auth.controller.js";
@@ -86,7 +87,7 @@ export async function router(
       return await getUserById(request, response, route.params.id!);
 
     case "PUT:/users/:id":
-      return notImplemented(request, response);
+      return await updateUser(request, response, route.params.id!);
 
     case "DELETE:/users/:id":
       return notImplemented(request, response);

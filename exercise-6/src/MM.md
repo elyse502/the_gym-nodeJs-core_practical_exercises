@@ -4535,3 +4535,554 @@ We'll implement `PUT /users/:id`, which is the most interesting endpoint so far.
 </details>
 
 <br/><hr/><br/>
+
+<details>
+  <summary><b>Twelveth phase</b></summary>
+
+Excellent. This is one of the most important exercises in the entire project.
+
+Until now you've only answered one question:
+
+> Who is making this request?
+
+That is authentication.
+
+Now we'll answer a second question:
+
+> Is this authenticated user allowed to perform this action?
+
+That is authorization.
+
+Many junior developers confuse these concepts. Production applications rely on both.
+
+---
+
+# Step 14 — Implement PUT /users/:id
+
+## Goal
+
+Implement:
+
+```http
+PUT /users/:id
+```
+
+Requirements:
+
+* Protected endpoint.
+* Only the authenticated user can update their own record.
+* Only the `name` field is editable.
+* Return:
+
+  * `401` if not authenticated.
+  * `403` if authenticated but trying to update another user.
+  * `404` if the user doesn't exist.
+* Persist changes to `users.json`.
+
+---
+
+# Authentication vs Authorization
+
+This endpoint introduces a new decision.
+
+```text
+Incoming Request
+        │
+        ▼
+Authenticate
+        │
+        ▼
+Who is this?
+        │
+        ▼
+User #15
+        │
+        ▼
+Can User #15 update User #18?
+        │
+   ┌────┴────┐
+   │         │
+  No        Yes
+   │         │
+403       Continue
+```
+
+Notice:
+
+Authentication answers:
+
+```text
+Who are you?
+```
+
+Authorization answers:
+
+```text
+What are you allowed to do?
+```
+
+---
+
+# Step 1 — Extend User Repository
+
+Open
+
+```text
+repositories/user.repository.ts
+```
+
+Add a reusable update method.
+
+```ts
+/**
+ * Updates an existing user.
+ */
+async update(
+  updatedUser: User,
+): Promise<void> {
+  const users =
+    await this.findAll();
+
+  const updatedUsers =
+    users.map((user) =>
+      user.id === updatedUser.id
+        ? updatedUser
+        : user,
+    );
+
+  await this.saveAll(updatedUsers);
+}
+```
+
+Notice the repository doesn't know:
+
+* HTTP
+* Authentication
+* Authorization
+
+It only knows how to persist users.
+
+---
+
+# Step 2 — Extend User Service
+
+Open
+
+```text
+services/user.service.ts
+```
+
+Add:
+
+```ts
+/**
+ * Updates the user's name.
+ *
+ * @throws Error if user does not exist.
+ */
+async updateName(
+  id: string,
+  name: string,
+): Promise<Omit<User, "password">> {
+  const user =
+    await userRepository.findById(id);
+
+  if (!user) {
+    throw new Error("USER_NOT_FOUND");
+  }
+
+  const updatedUser: User = {
+    ...user,
+    name,
+  };
+
+  await userRepository.update(updatedUser);
+
+  return toSafeUser(updatedUser);
+}
+```
+
+Notice something important.
+
+The service never checks:
+
+```ts
+auth.user.id
+```
+
+Authorization belongs to the controller because it depends on the authenticated HTTP request.
+
+The service only performs business logic.
+
+---
+
+# Step 3 — Implement Controller
+
+Open
+
+```text
+controllers/user.controller.ts
+```
+
+Add:
+
+```ts
+/**
+ * Updates the authenticated user's name.
+ */
+export async function updateUser(
+  request: IncomingMessage,
+  response: ServerResponse,
+  id: string,
+): Promise<void> {
+  const auth =
+    await requireAuth(
+      request,
+      response,
+    );
+
+  if (!auth) {
+    return;
+  }
+
+  if (auth.user.id !== id) {
+    sendError(
+      response,
+      403,
+      "Forbidden",
+    );
+
+    return;
+  }
+
+  try {
+    const body =
+      await getBody(request);
+
+    const { name } = body;
+
+    if (
+      typeof name !== "string" ||
+      name.trim() === ""
+    ) {
+      sendError(
+        response,
+        400,
+        "name is required",
+      );
+
+      return;
+    }
+
+    const user =
+      await userService.updateName(
+        id,
+        name.trim(),
+      );
+
+    sendJson(
+      response,
+      200,
+      user,
+    );
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message ===
+        "USER_NOT_FOUND"
+    ) {
+      sendError(
+        response,
+        404,
+        "User not found",
+      );
+
+      return;
+    }
+
+    if (error instanceof Error) {
+      sendError(
+        response,
+        400,
+        error.message,
+      );
+
+      return;
+    }
+
+    sendError(
+      response,
+      500,
+      "Internal Server Error",
+    );
+  }
+}
+```
+
+---
+
+# Why Only Update Name?
+
+The exercise explicitly says:
+
+> Allow updating name only.
+
+Imagine allowing this:
+
+```json
+{
+  "password": "...",
+  "createdAt": "...",
+  "id": "..."
+}
+```
+
+A client could overwrite fields that should never change.
+
+Instead we explicitly allow only:
+
+```json
+{
+  "name": "New Name"
+}
+```
+
+This is called a whitelist update.
+
+Production APIs almost always use this approach.
+
+---
+
+# Step 4 — Connect the Router
+
+Replace
+
+```ts
+case "PUT:/users/:id":
+    return notImplemented(request, response);
+```
+
+with
+
+```ts
+case "PUT:/users/:id":
+    return updateUser(
+        request,
+        response,
+        route.params.id!,
+    );
+```
+
+Update imports.
+
+```ts
+import {
+    registerUser,
+    getAllUsers,
+    getUserById,
+    updateUser,
+} from "../controllers/user.controller.js";
+```
+
+---
+
+# Test 1
+
+Login as Alice.
+
+Suppose Alice has:
+
+```text
+id = 123
+```
+
+Request
+
+```http
+PUT /users/123
+```
+
+Headers
+
+```http
+x-session-token: <alice-token>
+```
+
+Body
+
+```json
+{
+  "name": "Alice Cooper"
+}
+```
+
+Expected
+
+```http
+200 OK
+```
+
+```json
+{
+  "id": "...",
+  "name": "Alice Cooper",
+  "email": "...",
+  "createdAt": "..."
+}
+```
+
+---
+
+# Test 2
+
+Login as Alice.
+
+Try updating Bob.
+
+```http
+PUT /users/bob-id
+```
+
+Expected
+
+```http
+403 Forbidden
+```
+
+This demonstrates authorization.
+
+Alice is authenticated.
+
+She simply isn't allowed to edit Bob.
+
+---
+
+# Test 3
+
+Unknown user.
+
+```http
+PUT /users/unknown
+```
+
+Expected
+
+```http
+404 Not Found
+```
+
+---
+
+# Request Flow
+
+```text
+PUT /users/:id
+        │
+        ▼
+requireAuth()
+        │
+        ▼
+Authenticated?
+        │
+        ▼
+Ownership Check
+        │
+   ┌────┴─────┐
+   │          │
+403         Continue
+              │
+              ▼
+Read Body
+              │
+              ▼
+Update Name
+              │
+              ▼
+Persist users.json
+              │
+              ▼
+Return Updated User
+```
+
+---
+
+# Mental Model
+
+Notice how responsibilities are divided.
+
+```text
+Router
+```
+
+Extracts:
+
+```text
+:id
+```
+
+Controller
+
+* Authenticates.
+* Authorizes.
+* Reads request body.
+* Sends response.
+
+Service
+
+* Updates business object.
+
+Repository
+
+* Writes to disk.
+
+Each layer has exactly one responsibility.
+
+---
+
+# Authentication vs Authorization Recap
+
+Authentication
+
+```text
+Who are you?
+```
+
+Authorization
+
+```text
+Can you perform this action?
+```
+
+Examples:
+
+```text
+Login
+```
+
+Authentication.
+
+```text
+Update another user's profile
+```
+
+Authorization.
+
+You always authenticate before authorizing.
+
+---
+
+# Looking Ahead
+
+The final CRUD endpoint is `DELETE /users/:id`.
+
+Unlike update, deleting a user has an extra responsibility:
+
+* Remove the user.
+* Remove every active session belonging to that user.
+
+This introduces coordination between two repositories (`UserRepository` and `SessionRepository`) inside the service layer, a common pattern in real backend applications.
+
+
+</details>
+
+<br/><hr/><br/>

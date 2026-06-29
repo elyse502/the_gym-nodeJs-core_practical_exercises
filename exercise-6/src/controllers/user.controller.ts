@@ -7,7 +7,7 @@ import { sendJson } from "../utils/send-json.js";
 
 import { UserService } from "../services/user.service.js";
 
-import { authenticate } from "../services/authentication.service.js";
+import { requireAuth } from "../utils/requireAuth.js";
 
 const userService = new UserService();
 
@@ -64,11 +64,9 @@ export async function getAllUsers(
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
-  const auth = await authenticate(request);
+  const auth = await requireAuth(request, response);
 
   if (!auth) {
-    sendError(response, 401, "Unauthorized");
-
     return;
   }
 
@@ -89,11 +87,9 @@ export async function getUserById(
   response: ServerResponse,
   id: string,
 ): Promise<void> {
-  const auth = await authenticate(request);
+  const auth = await requireAuth(request, response);
 
   if (!auth) {
-    sendError(response, 401, "Unauthorized");
-
     return;
   }
 
@@ -104,6 +100,57 @@ export async function getUserById(
   } catch (error) {
     if (error instanceof Error && error.message === "USER_NOT_FOUND") {
       sendError(response, 404, "User not found");
+
+      return;
+    }
+
+    sendError(response, 500, "Internal Server Error");
+  }
+}
+
+/**
+ * Updates the authenticated user's name.
+ */
+export async function updateUser(
+  request: IncomingMessage,
+  response: ServerResponse,
+  id: string,
+): Promise<void> {
+  const auth = await requireAuth(request, response);
+
+  if (!auth) {
+    return;
+  }
+
+  if (auth.user.id !== id) {
+    sendError(response, 403, "Forbidden");
+
+    return;
+  }
+
+  try {
+    const body = await getBody(request);
+
+    const { name } = body;
+
+    if (typeof name !== "string" || name.trim() === "") {
+      sendError(response, 400, "name is required");
+
+      return;
+    }
+
+    const user = await userService.updateName(id, name.trim());
+
+    sendJson(response, 200, user);
+  } catch (error) {
+    if (error instanceof Error && error.message === "USER_NOT_FOUND") {
+      sendError(response, 404, "User not found");
+
+      return;
+    }
+
+    if (error instanceof Error) {
+      sendError(response, 400, error.message);
 
       return;
     }
