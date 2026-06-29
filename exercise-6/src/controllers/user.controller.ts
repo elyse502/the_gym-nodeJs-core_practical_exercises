@@ -1,10 +1,13 @@
 import { IncomingMessage, ServerResponse } from "node:http";
+import { parse } from "node:url";
 
 import { getBody } from "../utils/get-body.js";
 import { sendError } from "../utils/send-error.js";
 import { sendJson } from "../utils/send-json.js";
 
 import { UserService } from "../services/user.service.js";
+
+import { authenticate } from "../services/authentication.service.js";
 
 const userService = new UserService();
 
@@ -48,4 +51,32 @@ export async function registerUser(
 
     sendError(response, 500, "Internal Server Error");
   }
+}
+
+/**
+ * Returns every registered user.
+ *
+ * Supports filtering by name using:
+ *
+ * GET /users?name=john
+ */
+export async function getAllUsers(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const auth = await authenticate(request);
+
+  if (!auth) {
+    sendError(response, 401, "Unauthorized");
+
+    return;
+  }
+
+  const { query } = parse(request.url ?? "", true);
+
+  const filter = typeof query.name === "string" ? query.name : undefined;
+
+  const users = await userService.getAll(filter);
+
+  sendJson(response, 200, users);
 }

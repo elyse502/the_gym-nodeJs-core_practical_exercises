@@ -4,7 +4,7 @@ import { parse } from "node:url";
 import { sendError } from "../utils/send-error.js";
 import { notImplemented } from "../controllers/placeholder.controller.js";
 
-import { registerUser } from "../controllers/user.controller.js";
+import { getAllUsers, registerUser } from "../controllers/user.controller.js";
 
 import { loginUser, logoutUser } from "../controllers/auth.controller.js";
 
@@ -72,7 +72,7 @@ export async function router(
       return await logoutUser(request, response);
 
     case "GET:/users":
-      return notImplemented(request, response);
+      return await getAllUsers(request, response);
 
     case "GET:/users/:id":
       return notImplemented(request, response);

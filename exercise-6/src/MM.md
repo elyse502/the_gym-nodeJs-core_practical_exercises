@@ -3635,3 +3635,462 @@ It also demonstrates why repositories should expose reusable querying methods ra
 </details>
 
 <br/><hr/><br/>
+
+<details>
+  <summary><b>Tenth phase</b></summary>
+
+Excellent. This step introduces something every backend API does constantly:
+
+- Authentication
+- Query parameters
+- Filtering
+- Data sanitization
+
+Although the endpoint looks simple, it teaches several concepts that appear in almost every REST API.
+
+We'll keep the same architecture:
+
+```text
+HTTP Request
+      │
+      ▼
+Router
+      │
+      ▼
+Controller
+      │
+      ▼
+User Service
+      │
+      ▼
+User Repository
+      │
+      ▼
+users.json
+```
+
+Notice the controller still doesn't know how users are stored.
+
+---
+
+# Step 12 — Implement GET /users
+
+## Goal
+
+Implement:
+
+```http
+GET /users
+```
+
+Requirements:
+
+- Protected endpoint.
+- Return every user.
+- Never return passwords.
+- Support:
+
+```http
+GET /users?name=john
+```
+
+using a case-insensitive filter.
+
+---
+
+# Request Flow
+
+```text
+Incoming Request
+        │
+        ▼
+authenticate()
+        │
+        ▼
+Parse Query String
+        │
+        ▼
+UserService.getAllUsers()
+        │
+        ▼
+UserRepository.findAll()
+        │
+        ▼
+Remove Passwords
+        │
+        ▼
+Return Users
+```
+
+---
+
+# Step 1 — Extend User Service
+
+Open:
+
+```text
+services/user.service.ts
+```
+
+Add this method.
+
+```ts
+/**
+ * Returns every registered user without
+ * exposing password hashes.
+ *
+ * If a name filter is provided,
+ * performs a case-insensitive match.
+ */
+async getAll(
+  name?: string,
+): Promise<Omit<User, "password">[]> {
+  const users =
+    await userRepository.findAll();
+
+  const filteredUsers =
+    name === undefined
+      ? users
+      : users.filter((user) =>
+          user.name
+            .toLowerCase()
+            .includes(
+              name.toLowerCase(),
+            ),
+        );
+
+  return filteredUsers.map(
+    ({ password: _, ...safeUser }) =>
+      safeUser,
+  );
+}
+```
+
+---
+
+# Why Filter in the Service?
+
+Some developers would filter inside the controller.
+
+Don't.
+
+Controllers shouldn't contain business logic.
+
+This belongs here because:
+
+- filtering users
+- hiding passwords
+
+are business rules, not HTTP concerns.
+
+---
+
+# Step 2 — Add Controller
+
+Open:
+
+```text
+controllers/user.controller.ts
+```
+
+Import:
+
+```ts
+import { authenticate } from "../services/authentication.service.js";
+import { parse } from "node:url";
+```
+
+---
+
+Add the controller.
+
+```ts
+/**
+ * Returns every registered user.
+ *
+ * Supports filtering by name using:
+ *
+ * GET /users?name=john
+ */
+export async function getAllUsers(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const auth = await authenticate(request);
+
+  if (!auth) {
+    sendError(response, 401, "Unauthorized");
+
+    return;
+  }
+
+  const { query } = parse(request.url ?? "", true);
+
+  const filter = typeof query.name === "string" ? query.name : undefined;
+
+  const users = await userService.getAll(filter);
+
+  sendJson(response, 200, users);
+}
+```
+
+---
+
+# Why Parse the URL Again?
+
+The router only cared about:
+
+```text
+/users
+```
+
+The controller needs:
+
+```text
+/users?name=john
+```
+
+because query parameters belong to the endpoint logic, not the routing logic.
+
+---
+
+# Step 3 — Connect the Router
+
+Replace
+
+```ts
+case "GET:/users":
+    return notImplemented(request, response);
+```
+
+with
+
+```ts
+case "GET:/users":
+    return getAllUsers(
+        request,
+        response,
+    );
+```
+
+Import:
+
+```ts
+import { registerUser, getAllUsers } from "../controllers/user.controller.js";
+```
+
+---
+
+# Test 1
+
+Login.
+
+Copy your token.
+
+---
+
+Request
+
+```http
+GET /users
+```
+
+Headers
+
+```http
+x-session-token:
+<token>
+```
+
+Expected
+
+```json
+[
+  {
+    "id": "...",
+    "name": "Alice",
+    "email": "alice@example.com",
+    "createdAt": "..."
+  },
+  {
+    "id": "...",
+    "name": "John",
+    "email": "john@example.com",
+    "createdAt": "..."
+  }
+]
+```
+
+Notice:
+
+No password field.
+
+---
+
+# Test 2
+
+```http
+GET /users?name=ali
+```
+
+Expected
+
+```json
+[
+  {
+    "id": "...",
+    "name": "Alice",
+    "email": "alice@example.com",
+    "createdAt": "..."
+  }
+]
+```
+
+---
+
+# Test 3
+
+Case-insensitive.
+
+```http
+GET /users?name=ALI
+```
+
+Should produce the same result.
+
+---
+
+# Test 4
+
+Without a token.
+
+```http
+GET /users
+```
+
+Expected
+
+```http
+401 Unauthorized
+```
+
+---
+
+# Why Remove Passwords in the Service?
+
+Imagine tomorrow you build:
+
+- REST API
+- GraphQL API
+- CLI
+- Background worker
+
+All of them should automatically receive safe users.
+
+If sanitization happened only in the controller, another consumer might accidentally expose password hashes.
+
+Keeping this rule in the service makes it consistent everywhere.
+
+---
+
+# Request Flow
+
+```text
+GET /users
+       │
+       ▼
+authenticate()
+       │
+       ▼
+Parse query string
+       │
+       ▼
+UserService.getAll()
+       │
+       ▼
+UserRepository.findAll()
+       │
+       ▼
+Filter users
+       │
+       ▼
+Remove passwords
+       │
+       ▼
+Response
+```
+
+---
+
+# Mental Model
+
+Notice how each layer has a single responsibility.
+
+```text
+Controller
+```
+
+- Authenticate request.
+- Read query parameters.
+- Send HTTP response.
+
+```text
+Service
+```
+
+- Filter users.
+- Remove passwords.
+
+```text
+Repository
+```
+
+- Read `users.json`.
+
+This separation keeps every layer small and easy to test.
+
+---
+
+# Small Refactoring (Recommended)
+
+You're now sanitizing users in more than one service method (`register()` and `getAll()`). This is a good time to extract a reusable helper.
+
+Create `src/utils/user-mapper.ts`:
+
+```ts
+import { User } from "../types/user.interface.js";
+
+/**
+ * Removes sensitive fields before a user
+ * is returned to API clients.
+ */
+export function toSafeUser(user: User): Omit<User, "password"> {
+  const { password: _, ...safeUser } = user;
+
+  return safeUser;
+}
+```
+
+Then update your service:
+
+```ts
+return toSafeUser(user);
+```
+
+and
+
+```ts
+return filteredUsers.map(toSafeUser);
+```
+
+This follows the DRY (Don't Repeat Yourself) principle and prepares for future endpoints like `/users/:id` and `/me`.
+
+---
+
+## Next Step
+
+We'll implement `GET /users/:id`. This will introduce manual route parameter handling end-to-end, reuse the `toSafeUser()` mapper, return `404` for missing users, and further reinforce the separation between routing, business logic, and persistence before moving on to update and delete operations.
+
+</details>
+
+<br/><hr/><br/>

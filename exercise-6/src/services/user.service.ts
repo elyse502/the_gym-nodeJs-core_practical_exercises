@@ -5,6 +5,7 @@ import { User } from "../types/user.interface.js";
 
 import { SessionRepository } from "../repositories/session.repository.js";
 import { Session } from "../types/session.interface.js";
+import { toSafeUser } from "../utils/user-mapper.js";
 
 const userRepository = new UserRepository();
 
@@ -84,5 +85,25 @@ export class UserService {
     return {
       token: session.token,
     };
+  }
+
+  /**
+   * Returns every registered user without
+   * exposing password hashes.
+   *
+   * If a name filter is provided,
+   * performs a case-insensitive match.
+   */
+  async getAll(name?: string): Promise<Omit<User, "password">[]> {
+    const users = await userRepository.findAll();
+
+    const filteredUsers =
+      name === undefined
+        ? users
+        : users.filter((user) =>
+            user.name.toLowerCase().includes(name.toLowerCase()),
+          );
+
+    return filteredUsers.map((user) => toSafeUser(user));
   }
 }
