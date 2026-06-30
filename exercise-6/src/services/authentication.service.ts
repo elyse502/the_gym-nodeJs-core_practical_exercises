@@ -5,6 +5,8 @@ import { UserRepository } from "../repositories/user.repository.js";
 
 import { AuthenticationResult } from "../types/authentication-result.interface.js";
 
+import { toSafeUser } from "../utils/user-mapper.js";
+
 const sessionRepository = new SessionRepository();
 const userRepository = new UserRepository();
 
@@ -37,7 +39,7 @@ export async function authenticate(
   }
 
   return {
-    user,
+    user: toSafeUser(user) as never,
     session,
   };
 }

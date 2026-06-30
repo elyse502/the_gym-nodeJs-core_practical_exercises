@@ -5507,3 +5507,413 @@ Only two endpoints remain:
 </details>
 
 <br/><hr/><br/>
+
+<details>
+  <summary><b>Fourteenth phase</b></summary>
+
+Excellent. This endpoint is intentionally small.
+
+The exercise even hints at it:
+
+> `GET /me` ... Three lines maximum.
+
+The purpose is to demonstrate good architecture. If your authentication logic is well designed, this endpoint becomes almost trivial.
+
+This is a common pattern in production APIs. The framework and middleware perform authentication before the controller runs, leaving the controller with very little work.
+
+---
+
+# Step 16 — Implement GET /me
+
+## Goal
+
+Implement:
+
+```http
+GET /me
+```
+
+Requirements:
+
+- Protected endpoint.
+- Authenticate the request.
+- Return the authenticated user.
+- Never return the password.
+- Keep the controller extremely small.
+
+---
+
+# Request Flow
+
+```text
+Incoming Request
+        │
+        ▼
+requireAuth()
+        │
+        ▼
+Authenticated User
+        │
+        ▼
+Return User
+```
+
+Notice something interesting.
+
+Unlike previous endpoints:
+
+- no repository call
+- no service call
+- no file read
+
+Everything we need is already available.
+
+---
+
+# Why?
+
+Recall what `authenticate()` returns.
+
+```ts
+interface AuthenticationResult {
+  user: User;
+  session: Session;
+}
+```
+
+The user has already been loaded from `users.json`.
+
+There is nothing else to do.
+
+---
+
+# Step 1 — Update Authentication Service
+
+Currently your authentication service probably returns:
+
+```ts
+user;
+```
+
+Let's make it safer.
+
+If it isn't already doing this, update it.
+
+```ts
+import { toSafeUser } from "../utils/user-mapper.js";
+```
+
+Return
+
+```ts
+return {
+  user: toSafeUser(user),
+  session,
+};
+```
+
+instead of
+
+```ts
+return {
+  user,
+  session,
+};
+```
+
+Now every authenticated endpoint automatically receives a sanitized user.
+
+No controller has to remember to remove passwords.
+
+This is a great example of pushing business rules down into reusable code.
+
+---
+
+# Step 2 — Implement Controller
+
+Open
+
+```text
+controllers/user.controller.ts
+```
+
+Add
+
+```ts
+/**
+ * Returns the currently
+ * authenticated user.
+ */
+export async function getMe(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const auth = await requireAuth(request, response);
+
+  if (!auth) {
+    return;
+  }
+
+  sendJson(response, 200, auth.user);
+}
+```
+
+That's it.
+
+No repository.
+
+No service.
+
+No parsing.
+
+Exactly as the exercise intended.
+
+---
+
+# Why Doesn't This Endpoint Call UserService?
+
+Because doing so would read the file again.
+
+Think about what has already happened.
+
+```text
+Incoming Request
+        │
+        ▼
+authenticate()
+        │
+        ▼
+Read users.json
+        │
+        ▼
+Find User
+```
+
+Calling the service again would perform another unnecessary file read.
+
+Instead we reuse the authenticated user.
+
+---
+
+# Step 3 — Connect the Router
+
+Replace
+
+```ts
+case "GET:/me":
+    return notImplemented(request, response);
+```
+
+with
+
+```ts
+case "GET:/me":
+    return getMe(
+        request,
+        response,
+    );
+```
+
+Update imports.
+
+```ts
+import {
+  registerUser,
+  getAllUsers,
+  getUserById,
+  updateUser,
+  deleteUser,
+  getMe,
+} from "../controllers/user.controller.js";
+```
+
+---
+
+# Test 1
+
+Login.
+
+Receive
+
+```json
+{
+  "token": "abc123"
+}
+```
+
+---
+
+Request
+
+```http
+GET /me
+```
+
+Headers
+
+```http
+x-session-token: abc123
+```
+
+Expected
+
+```json
+{
+  "id": "...",
+  "name": "Alice",
+  "email": "alice@example.com",
+  "createdAt": "..."
+}
+```
+
+Notice:
+
+No password field.
+
+---
+
+# Test 2
+
+Without token.
+
+```http
+GET /me
+```
+
+Expected
+
+```http
+401 Unauthorized
+```
+
+---
+
+# Test 3
+
+Logout.
+
+Then immediately call
+
+```http
+GET /me
+```
+
+using the same token.
+
+Expected
+
+```http
+401 Unauthorized
+```
+
+Why?
+
+Because:
+
+```text
+Token
+     │
+     ▼
+authenticate()
+     │
+     ▼
+sessions.json
+     │
+     ▼
+Session missing
+     │
+     ▼
+Unauthorized
+```
+
+The client still sends the token.
+
+The server no longer recognizes it.
+
+---
+
+# Mental Model
+
+Notice how much work was reused.
+
+```text
+GET /me
+      │
+      ▼
+requireAuth()
+      │
+      ▼
+authenticate()
+      │
+      ▼
+SessionRepository
+      │
+      ▼
+UserRepository
+      │
+      ▼
+Return User
+```
+
+The controller performs almost no work.
+
+That is a sign of good architecture.
+
+---
+
+# Architecture Review
+
+Your application now looks like this.
+
+```text
+                Router
+                   │
+        ┌──────────┴──────────┐
+        ▼                     ▼
+User Controllers      Auth Controller
+        │                     │
+        └──────────┬──────────┘
+                   ▼
+            User Service
+                   │
+      ┌────────────┴────────────┐
+      ▼                         ▼
+User Repository        Session Repository
+      │                         │
+      └────────────┬────────────┘
+                   ▼
+              JSON Files
+```
+
+Every layer has one responsibility.
+
+This is the same architecture you'll find in many Express, NestJS, Spring Boot, and ASP.NET applications.
+
+---
+
+# Exercise 6 Status
+
+You have now completed all functional requirements:
+
+- ✅ Manual request body parsing
+- ✅ Manual router
+- ✅ User registration
+- ✅ Password hashing
+- ✅ Login
+- ✅ Session management
+- ✅ Authentication helper
+- ✅ Logout
+- ✅ Protected routes
+- ✅ Authorization
+- ✅ User CRUD
+- ✅ `/me`
+
+Only one major task remains:
+
+## Step 17 — Stress Testing and Race Condition Analysis
+
+This is arguably the most educational part of the exercise. You'll intentionally expose a race condition in your file-based database, analyze it at the event loop level, implement a write lock, rerun the stress test, and observe why the fix guarantees exactly one successful registration and nineteen duplicate responses.
+
+</details>
+
+<br/><hr/><br/>

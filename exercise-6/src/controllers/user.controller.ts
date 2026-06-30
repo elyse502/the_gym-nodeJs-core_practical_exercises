@@ -195,3 +195,20 @@ export async function deleteUser(
     sendError(response, 500, "Internal Server Error");
   }
 }
+
+/**
+ * Returns the currently
+ * authenticated user.
+ */
+export async function getMe(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  const auth = await requireAuth(request, response);
+
+  if (!auth) {
+    return;
+  }
+
+  sendJson(response, 200, auth.user);
+}

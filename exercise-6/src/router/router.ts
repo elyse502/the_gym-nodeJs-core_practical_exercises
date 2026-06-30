@@ -2,11 +2,11 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { parse } from "node:url";
 
 import { sendError } from "../utils/send-error.js";
-import { notImplemented } from "../controllers/placeholder.controller.js";
 
 import {
   deleteUser,
   getAllUsers,
+  getMe,
   getUserById,
   registerUser,
   updateUser,
@@ -94,7 +94,7 @@ export async function router(
       return await deleteUser(request, response, route.params.id!);
 
     case "GET:/me":
-      return notImplemented(request, response);
+      return await getMe(request, response);
 
     default:
       sendError(response, 404, "Route not found");
