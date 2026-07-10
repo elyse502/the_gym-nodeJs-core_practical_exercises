@@ -5917,3 +5917,1260 @@ This is arguably the most educational part of the exercise. You'll intentionally
 </details>
 
 <br/><hr/><br/>
+
+<details>
+
+<summary><b>Fifteenth phase</b></summary>
+
+Excellent. This is the most important part of Exercise 6.
+
+Everything you've built so far works under normal usage. Now you're going to test how your application behaves under concurrency.
+
+This exercise teaches a lesson that every backend engineer eventually learns:
+
+> Correct code is not necessarily concurrent-safe code.
+
+Your application will appear to work perfectly until multiple requests arrive at nearly the same time.
+
+---
+
+# Step 17 — Stress Test and Fix the Race Condition
+
+## Goal
+
+Run 20 concurrent registration requests using `flood.js`, observe the race condition, explain why it happens at the event loop level, then fix it with a simple write lock.
+
+---
+
+# Part 1 — Understand the Race Condition
+
+The registration flow currently looks like this:
+
+```text
+Read users.json
+      │
+      ▼
+Email exists?
+      │
+      ▼
+Add new user
+      │
+      ▼
+Write users.json
+```
+
+Looks safe.
+
+But now imagine two requests arriving almost simultaneously.
+
+---
+
+## Timeline
+
+```text
+Request A                 Request B
+
+Read file
+                         Read file
+
+No email found
+                         No email found
+
+Create user
+
+                         Create user
+
+Write file
+
+                         Write file
+```
+
+Both requests read the same file before either one writes its changes.
+
+Both believe the email is available.
+
+Both create the user.
+
+This is the race condition.
+
+---
+
+# Event Loop View
+
+Understanding this at the event loop level is what the exercise is really about.
+
+Suppose both requests arrive almost simultaneously.
+
+```text
+Client A
+Client B
+      │
+      ▼
+Event Loop
+```
+
+---
+
+### Tick 1
+
+```text
+Request A
+
+readFile(users.json)
+```
+
+`fs.promises.readFile()` does not block JavaScript.
+
+Node sends the work to libuv's thread pool.
+
+```text
+Main Thread
+
+Request A
+    │
+    ▼
+libuv Thread Pool
+```
+
+The main thread immediately becomes free.
+
+---
+
+### Tick 2
+
+Before Request A finishes reading...
+
+Request B arrives.
+
+```text
+Request B
+
+readFile(users.json)
+```
+
+Another thread begins reading.
+
+Now both reads are happening concurrently.
+
+---
+
+### Tick 3
+
+Request A finishes.
+
+Callback enters the event loop.
+
+```text
+Users:
+
+[]
+```
+
+Request A thinks:
+
+```text
+Email available.
+```
+
+---
+
+### Tick 4
+
+Request B also finishes.
+
+It read the same file.
+
+```text
+[]
+```
+
+Request B also thinks:
+
+```text
+Email available.
+```
+
+Neither request knows about the other.
+
+---
+
+### Tick 5
+
+Request A writes
+
+```json
+[
+  {
+    "email": "same@example.com"
+  }
+]
+```
+
+---
+
+### Tick 6
+
+Request B writes
+
+```json
+[
+  {
+    "email": "same@example.com"
+  }
+]
+```
+
+Depending on timing, you might see:
+
+- duplicate users
+- overwritten writes
+- corrupted JSON (rare, but possible if writes overlap)
+
+This is exactly what a race condition is.
+
+---
+
+# Part 2 — Run the Stress Test
+
+Use the provided `flood.js`.
+
+```bash
+node flood.js
+```
+
+Expected output before the fix might look like:
+
+```text
+request 1 → 201
+request 2 → 201
+request 3 → 409
+request 4 → 201
+request 5 → 409
+request 6 → 201
+...
+```
+
+Or perhaps:
+
+```text
+201 created: 4
+409 duplicate: 16
+```
+
+Or another inconsistent combination.
+
+The exact result depends on timing.
+
+The important point is that you may see more than one `201`.
+
+---
+
+# Why Doesn't JavaScript's Single Thread Prevent This?
+
+A common misconception is:
+
+> JavaScript is single-threaded, so races can't happen.
+
+The JavaScript execution thread is single-threaded.
+
+The file operations are not.
+
+`fs.promises.readFile()` runs in libuv's thread pool.
+
+Multiple reads complete independently and enqueue callbacks back onto the event loop.
+
+The overlap occurs while the asynchronous I/O is in progress.
+
+---
+
+# Part 3 — Implement a Simple Write Lock
+
+The exercise asks for a simple boolean lock.
+
+Create a new helper.
+
+## `utils/write-lock.ts`
+
+```ts
+/**
+ * A simple in-memory write lock that
+ * serializes write operations.
+ *
+ * This implementation is suitable for
+ * learning purposes and a single
+ * Node.js process.
+ */
+
+let isWriting = false;
+
+const queue: Array<() => void> = [];
+
+/**
+ * Acquires the write lock.
+ */
+export async function acquireLock(): Promise<void> {
+  if (!isWriting) {
+    isWriting = true;
+
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    queue.push(resolve);
+  });
+}
+
+/**
+ * Releases the write lock.
+ */
+export function releaseLock(): void {
+  const next = queue.shift();
+
+  if (next) {
+    next();
+
+    return;
+  }
+
+  isWriting = false;
+}
+```
+
+This guarantees that only one write operation proceeds at a time.
+
+---
+
+# Part 4 — Use the Lock
+
+Open:
+
+```text
+services/user.service.ts
+```
+
+Update `register()`.
+
+```ts
+import { acquireLock, releaseLock } from "../utils/write-lock.js";
+```
+
+Wrap the critical section.
+
+```ts
+await acquireLock();
+
+try {
+  const existingUser = await userRepository.findByEmail(email);
+
+  if (existingUser) {
+    throw new Error("EMAIL_ALREADY_EXISTS");
+  }
+
+  // create user
+
+  await userRepository.create(user);
+
+  return toSafeUser(user);
+} finally {
+  releaseLock();
+}
+```
+
+Notice the use of `finally`.
+
+Even if an exception occurs, the lock is always released.
+
+This is exactly how mutexes are typically used.
+
+<details>
+
+  <summary>How exactly should I update register() method to use a simple write lock?</summary>
+
+From this existing script:
+
+```ts
+import crypto from "node:crypto";
+
+import { UserRepository } from "../repositories/user.repository.js";
+import { User } from "../types/user.interface.js";
+
+import { SessionRepository } from "../repositories/session.repository.js";
+import { Session } from "../types/session.interface.js";
+import { toSafeUser } from "../utils/user-mapper.js";
+
+import { acquireLock, releaseLock } from "../utils/write-lock.js";
+
+const userRepository = new UserRepository();
+
+const sessionRepository = new SessionRepository();
+
+/**
+ * Handles business logic related to users.
+ */
+export class UserService {
+  /**
+   * Registers a new user.
+   *
+   * @throws Error if the email already exists.
+   */
+  async register(
+    name: string,
+    email: string,
+    password: string,
+  ): Promise<Omit<User, "password">> {
+    const existingUser = await userRepository.findByEmail(email);
+
+    if (existingUser) {
+      throw new Error("EMAIL_ALREADY_EXISTS");
+    }
+
+    const hashedPassword = crypto
+      .createHash("sha256")
+      .update(password)
+      .digest("hex");
+
+    const user: User = {
+      id: crypto.randomUUID(),
+      name,
+      email,
+      password: hashedPassword,
+      createdAt: new Date().toISOString(),
+    };
+
+    await userRepository.create(user);
+
+    const { password: _, ...safeUser } = user;
+
+    return safeUser;
+  }
+
+  /**
+   * Authenticates a user and creates
+   * a new session.
+   *
+   * @throws Error when credentials
+   * are invalid.
+   */
+  async login(email: string, password: string): Promise<{ token: string }> {
+    const user = await userRepository.findByEmail(email);
+
+    if (!user) {
+      throw new Error("INVALID_CREDENTIALS");
+    }
+
+    const hashedPassword = crypto
+      .createHash("sha256")
+      .update(password)
+      .digest("hex");
+
+    if (hashedPassword !== user.password) {
+      throw new Error("INVALID_CREDENTIALS");
+    }
+
+    const session: Session = {
+      token: crypto.randomUUID(),
+      userId: user.id,
+      createdAt: new Date().toISOString(),
+    };
+
+    await sessionRepository.create(session);
+
+    return {
+      token: session.token,
+    };
+  }
+
+  /**
+   * Returns every registered user without
+   * exposing password hashes.
+   *
+   * If a name filter is provided,
+   * performs a case-insensitive match.
+   */
+  async getAll(name?: string): Promise<Omit<User, "password">[]> {
+    const users = await userRepository.findAll();
+
+    const filteredUsers =
+      name === undefined
+        ? users
+        : users.filter((user) =>
+            user.name.toLowerCase().includes(name.toLowerCase()),
+          );
+
+    return filteredUsers.map((user) => toSafeUser(user));
+  }
+
+  /**
+   * Returns a single user by ID.
+   *
+   * @throws Error if the user does not exist.
+   */
+  async getById(id: string): Promise<Omit<User, "password">> {
+    const user = await userRepository.findById(id);
+
+    if (!user) {
+      throw new Error("USER_NOT_FOUND");
+    }
+
+    return toSafeUser(user);
+  }
+
+  /**
+   * Updates the user's name.
+   *
+   * @throws Error if user does not exist.
+   */
+  async updateName(id: string, name: string): Promise<Omit<User, "password">> {
+    const user = await userRepository.findById(id);
+
+    if (!user) {
+      throw new Error("USER_NOT_FOUND");
+    }
+
+    const updatedUser: User = {
+      ...user,
+      name,
+    };
+
+    await userRepository.update(updatedUser);
+
+    return toSafeUser(updatedUser);
+  }
+
+  /**
+   * Deletes a user and all of
+   * their active sessions.
+   *
+   * @throws Error if the user
+   * does not exist.
+   */
+  async deleteUser(id: string): Promise<void> {
+    const user = await userRepository.findById(id);
+
+    if (!user) {
+      throw new Error("USER_NOT_FOUND");
+    }
+
+    await userRepository.delete(id);
+
+    await sessionRepository.deleteByUserId(id);
+  }
+}
+```
+
+---
+
+Your current implementation is exactly where the race condition exists.
+
+The critical section is this sequence:
+
+```text
+findByEmail()
+      │
+      ▼
+Create User
+      │
+      ▼
+userRepository.create()
+```
+
+Two concurrent requests can both execute `findByEmail()` before either executes `create()`.
+
+The lock must protect the entire read → validate → write sequence.
+
+Your `register()` should become:
+
+```ts
+/**
+ * Registers a new user.
+ *
+ * @throws Error if the email already exists.
+ */
+async register(
+  name: string,
+  email: string,
+  password: string,
+): Promise<Omit<User, "password">> {
+  await acquireLock();
+
+  try {
+    const existingUser = await userRepository.findByEmail(email);
+
+    if (existingUser) {
+      throw new Error("EMAIL_ALREADY_EXISTS");
+    }
+
+    const hashedPassword = crypto
+      .createHash("sha256")
+      .update(password)
+      .digest("hex");
+
+    const user: User = {
+      id: crypto.randomUUID(),
+      name,
+      email,
+      password: hashedPassword,
+      createdAt: new Date().toISOString(),
+    };
+
+    await userRepository.create(user);
+
+    return toSafeUser(user);
+  } finally {
+    releaseLock();
+  }
+}
+```
+
+## Why the lock starts before `findByEmail()`
+
+A common mistake is to do this:
+
+```ts
+const existingUser = await userRepository.findByEmail(email);
+
+await acquireLock();
+
+// create user
+```
+
+This does **not** solve the race condition.
+
+Imagine two requests.
+
+```text
+Request A
+---------
+findByEmail()
+(email not found)
+
+                    Request B
+                    ---------
+                    findByEmail()
+                    (email not found)
+
+Request A acquires lock
+Request A creates user
+Request A releases lock
+
+                    Request B acquires lock
+                    Request B creates duplicate
+```
+
+Both requests already decided the email didn't exist before the lock was acquired.
+
+The race still exists.
+
+---
+
+## Why `finally` is required
+
+Suppose this happens:
+
+```ts
+if (existingUser) {
+  throw new Error("EMAIL_ALREADY_EXISTS");
+}
+```
+
+Without `finally`, `releaseLock()` never executes.
+
+The application would remain permanently locked.
+
+Every future registration would wait forever.
+
+With `finally`:
+
+```ts
+await acquireLock();
+
+try {
+  // critical section
+} finally {
+  releaseLock();
+}
+```
+
+the lock is released whether:
+
+- the registration succeeds,
+- the email already exists,
+- `create()` throws,
+- or any other unexpected error occurs.
+
+---
+
+## Visualizing the difference
+
+### Before the lock
+
+```text
+Request A                  Request B
+
+findByEmail()
+                           findByEmail()
+
+not found
+                           not found
+
+create()
+                           create()
+```
+
+Both requests believe the email is available.
+
+---
+
+### After the lock
+
+```text
+Request A
+
+Acquire Lock
+     │
+     ▼
+findByEmail()
+     │
+     ▼
+create()
+     │
+     ▼
+Release Lock
+
+                 Request B
+
+             waits here
+                 │
+                 ▼
+            Acquire Lock
+                 │
+                 ▼
+           findByEmail()
+                 │
+                 ▼
+        email already exists
+                 │
+                 ▼
+             409 Conflict
+```
+
+Only one request enters the critical section at a time.
+
+---
+
+## One improvement I recommend
+
+Right now you're creating the password hash while holding the lock.
+
+Hashing is CPU work that doesn't require exclusive access to the file.
+
+You can reduce the time the lock is held by hashing first:
+
+```ts
+const hashedPassword = crypto
+  .createHash("sha256")
+  .update(password)
+  .digest("hex");
+
+await acquireLock();
+
+try {
+  const existingUser = await userRepository.findByEmail(email);
+
+  if (existingUser) {
+    throw new Error("EMAIL_ALREADY_EXISTS");
+  }
+
+  const user: User = {
+    id: crypto.randomUUID(),
+    name,
+    email,
+    password: hashedPassword,
+    createdAt: new Date().toISOString(),
+  };
+
+  await userRepository.create(user);
+
+  return toSafeUser(user);
+} finally {
+  releaseLock();
+}
+```
+
+This version is preferable because the lock protects only the shared resource, `users.json`. CPU work such as hashing runs before acquiring the lock, allowing other requests to proceed sooner. This is closer to how critical sections are designed in production systems.
+
+</details>
+
+---
+
+# Why Lock Only Registration?
+
+The race condition exists because registration performs:
+
+1. Read.
+2. Validate.
+3. Write.
+
+Those three operations must behave atomically.
+
+Without a lock:
+
+```text
+Read
+
+Validate
+
+Write
+```
+
+can interleave with another request.
+
+With the lock:
+
+```text
+Request A
+
+Read
+Validate
+Write
+
+Unlock
+
+Request B
+
+Read
+Validate
+Write
+```
+
+Now Request B sees the updated file.
+
+---
+
+# Part 5 — Run the Stress Test Again
+
+Execute:
+
+```bash
+node flood.js
+```
+
+Every run should produce:
+
+```text
+201 created: 1
+409 duplicate: 19
+```
+
+Exactly.
+
+Every time.
+
+---
+
+# Event Loop After the Fix
+
+```text
+Request A
+
+Acquire Lock
+
+Read
+
+Write
+
+Release Lock
+```
+
+Only after the lock is released:
+
+```text
+Request B
+
+Acquire Lock
+
+Read
+```
+
+Now Request B reads the updated file.
+
+It immediately finds:
+
+```text
+same@example.com
+```
+
+and returns:
+
+```http
+409 Conflict
+```
+
+No duplicate is created.
+
+---
+
+# Why Is This Still Not Production-Ready?
+
+This lock only protects one Node.js process.
+
+Imagine:
+
+```text
+Server A
+
+Server B
+
+Server C
+```
+
+Each process would have its own:
+
+```ts
+let isWriting = false;
+```
+
+The processes don't share memory.
+
+Production systems solve this with:
+
+- database transactions
+- unique database constraints
+- distributed locks (for example, Redis)
+- optimistic concurrency control
+
+The boolean lock is perfect for learning because it exposes the underlying problem without introducing additional infrastructure.
+
+---
+
+# Final Architecture
+
+Your completed application now looks like this:
+
+```text
+                    HTTP Server
+                         │
+                         ▼
+                      Router
+                         │
+        ┌────────────────┴────────────────┐
+        ▼                                 ▼
+ User Controller                  Auth Controller
+        │                                 │
+        └────────────────┬────────────────┘
+                         ▼
+                   User Service
+                         │
+        ┌────────────────┴────────────────┐
+        ▼                                 ▼
+ User Repository                  Session Repository
+        │                                 │
+        └────────────────┬────────────────┘
+                         ▼
+                     JSON Files
+
+               Write Lock (Register)
+```
+
+---
+
+# Exercise 6 Complete
+
+You have now implemented:
+
+- ✅ Manual HTTP server
+- ✅ Manual routing
+- ✅ Manual body parsing
+- ✅ User registration
+- ✅ Password hashing
+- ✅ Login
+- ✅ Session management
+- ✅ Authentication
+- ✅ Authorization
+- ✅ CRUD operations
+- ✅ `/me`
+- ✅ Race condition analysis
+- ✅ Write lock
+- ✅ Stress testing
+
+This exercise mirrors many of the concepts found in frameworks like Express, Fastify, NestJS, Spring Boot, and ASP.NET, but you've implemented them from first principles using only Node.js core modules.
+
+---
+
+<details>
+
+  <summary><b>One other thing you kept mentioning running this file node flood.js, but we never created it how do I create it?</b></summary>
+
+Good catch. We should have created it as part of the exercise. The instructions assume the file exists, but since we've been building the project step by step, we need to add it ourselves.
+
+I recommend placing it at the root of `exercise-6` alongside your `package.json`.
+
+## Project structure
+
+```text
+exercise-6/
+│
+├── data/
+│   ├── users.json
+│   └── sessions.json
+│
+├── src/
+│   ├── controllers/
+│   ├── services/
+│   ├── repositories/
+│   ├── routes/
+│   ├── utils/
+│   ├── server.ts
+│   └── ...
+│
+├── flood.js
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+Notice that `flood.js` is plain JavaScript. That's intentional. It is a standalone script that behaves like an external client sending requests to your API. It does not need access to your TypeScript source.
+
+---
+
+# Step 1 — Create `flood.js`
+
+```js
+const http = require("http");
+
+/**
+ * Sends a registration request to the server.
+ *
+ * @param {number} requestId
+ * @returns {Promise<object>}
+ */
+function sendRequest(requestId) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      name: "Concurrent User",
+      email: "same@example.com",
+      password: "123456",
+    });
+
+    const options = {
+      hostname: "localhost",
+      port: 3000,
+      path: "/register",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+      },
+    };
+
+    const req = http.request(options, (res) => {
+      let data = "";
+
+      res.on("data", (chunk) => {
+        data += chunk;
+      });
+
+      res.on("end", () => {
+        let parsedBody;
+
+        try {
+          parsedBody = JSON.parse(data);
+        } catch {
+          parsedBody = data;
+        }
+
+        resolve({
+          requestId,
+          status: res.statusCode,
+          body: parsedBody,
+        });
+      });
+    });
+
+    req.on("error", reject);
+
+    req.write(body);
+    req.end();
+  });
+}
+
+/**
+ * Fires 20 requests simultaneously.
+ */
+async function run() {
+  console.log("\nStarting stress test...\n");
+
+  const results = await Promise.all(
+    Array.from({ length: 20 }, (_, index) => sendRequest(index + 1)),
+  );
+
+  results.forEach((result) => {
+    console.log(
+      `Request ${result.requestId.toString().padStart(2)} → ${result.status}`,
+    );
+  });
+
+  const created = results.filter((result) => result.status === 201).length;
+
+  const duplicates = results.filter((result) => result.status === 409).length;
+
+  console.log("\nSummary");
+  console.log("----------------------");
+  console.log(`201 Created   : ${created}`);
+  console.log(`409 Duplicate : ${duplicates}`);
+}
+
+run().catch(console.error);
+```
+
+---
+
+# Step 2 — Start your server
+
+In the first terminal:
+
+```bash
+npm run dev
+```
+
+You should see something like:
+
+```text
+Server running on http://localhost:3000
+```
+
+---
+
+# Step 3 — Run the stress test
+
+Open another terminal.
+
+```bash
+node flood.js
+```
+
+---
+
+# Expected output (before the lock)
+
+You might see:
+
+```text
+Starting stress test...
+
+Request  1 → 201
+Request  2 → 201
+Request  3 → 201
+Request  4 → 409
+Request  5 → 201
+...
+
+Summary
+----------------------
+201 Created   : 4
+409 Duplicate : 16
+```
+
+Or:
+
+```text
+201 Created   : 2
+409 Duplicate : 18
+```
+
+Or another combination.
+
+The exact numbers depend on timing.
+
+---
+
+# Expected output (after the lock)
+
+Every run should produce:
+
+```text
+Starting stress test...
+
+Request  1 → 201
+Request  2 → 409
+Request  3 → 409
+Request  4 → 409
+...
+Request 20 → 409
+
+Summary
+----------------------
+201 Created   : 1
+409 Duplicate : 19
+```
+
+Every execution should produce the same result.
+
+---
+
+# What to inspect
+
+After each run, open:
+
+```text
+data/users.json
+```
+
+### Before the lock
+
+You might find duplicate users with the same email, for example:
+
+```json
+[
+  {
+    "email": "same@example.com"
+  },
+  {
+    "email": "same@example.com"
+  }
+]
+```
+
+If your writes overlapped badly, you might even end up with malformed JSON.
+
+### After the lock
+
+You should always have exactly one user:
+
+```json
+[
+  {
+    "id": "...",
+    "name": "Concurrent User",
+    "email": "same@example.com",
+    "password": "...",
+    "createdAt": "..."
+  }
+]
+```
+
+---
+
+# Why is `flood.js` JavaScript instead of TypeScript?
+
+This is deliberate. Think of `flood.js` as a tiny load-testing client, not part of your application.
+
+It simulates a completely separate process, just like:
+
+- Postman
+- Insomnia
+- a browser
+- a mobile app
+- another backend service
+
+In production, your API doesn't know or care what language the client is written in. Using plain JavaScript keeps the script simple and avoids compiling or running it with `tsx`.
+
+---
+
+This script is a simple form of load testing. In later exercises or real projects, you'll likely use dedicated tools such as `autocannon`, `k6`, or `Apache JMeter`, but building one with Node's `http` module helps you understand what those tools are doing under the hood.
+
+</details>
+
+</details>
+
+<br/><hr/><br/>

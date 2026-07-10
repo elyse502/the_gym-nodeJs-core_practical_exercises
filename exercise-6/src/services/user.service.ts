@@ -7,6 +7,8 @@ import { SessionRepository } from "../repositories/session.repository.js";
 import { Session } from "../types/session.interface.js";
 import { toSafeUser } from "../utils/user-mapper.js";
 
+import { acquireLock, releaseLock } from "../utils/write-lock.js";
+
 const userRepository = new UserRepository();
 
 const sessionRepository = new SessionRepository();
@@ -25,30 +27,34 @@ export class UserService {
     email: string,
     password: string,
   ): Promise<Omit<User, "password">> {
-    const existingUser = await userRepository.findByEmail(email);
-
-    if (existingUser) {
-      throw new Error("EMAIL_ALREADY_EXISTS");
-    }
-
     const hashedPassword = crypto
       .createHash("sha256")
       .update(password)
       .digest("hex");
 
-    const user: User = {
-      id: crypto.randomUUID(),
-      name,
-      email,
-      password: hashedPassword,
-      createdAt: new Date().toISOString(),
-    };
+    await acquireLock();
 
-    await userRepository.create(user);
+    try {
+      const existingUser = await userRepository.findByEmail(email);
 
-    const { password: _, ...safeUser } = user;
+      if (existingUser) {
+        throw new Error("EMAIL_ALREADY_EXISTS");
+      }
 
-    return safeUser;
+      const user: User = {
+        id: crypto.randomUUID(),
+        name,
+        email,
+        password: hashedPassword,
+        createdAt: new Date().toISOString(),
+      };
+
+      await userRepository.create(user);
+
+      return toSafeUser(user);
+    } finally {
+      releaseLock();
+    }
   }
 
   /**
